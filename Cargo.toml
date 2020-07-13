@@ -6,8 +6,9 @@ edition = "2018"
 description = "A modern Rust debugging library."
 repository = "https://github.com/nbaksalyar/headcrab/"
 license = "MIT OR Apache-2.0"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+categories = ["development-tools::debugging"]
+documentation = "https://docs.rs/headcrab"
+readme = "README.md"
 
 [dependencies]
 nix = "0.17.0"

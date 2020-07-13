@@ -1,4 +1,4 @@
-name: Rust
+name: Linux x86_64
 
 on:
   push:
@@ -10,11 +10,22 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  clippy_check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v1
+      - run: rustup component add clippy
+      - uses: actions-rs/clippy-check@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          args: --all-features
   build:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v2
     - name: Build
       run: cargo build --verbose
+    - name: Build C tests
+      run: cd tests && make
     - name: Run tests
       run: cargo test --verbose

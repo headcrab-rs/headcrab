@@ -1,5 +1,7 @@
 # Headcrab
 
+![Linux](https://github.com/nbaksalyar/headcrab/workflows/Rust/badge.svg?branch=master)
+
 A modern Rust debugging library.
 
 ## Goals
@@ -29,6 +31,7 @@ Long-term goals:
 - Make symbolication reusable for eBPF and dynamic tracing.
 - JSON-RPC and support for [Debug Adapter Protocol](https://microsoft.github.io/debug-adapter-protocol/).
 - Command-line interface.
+- Integrate with rr for reverse debugging.
 - Collaborative debugging.
 - Use the [LLVM DExTer](https://github.com/llvm/llvm-project/tree/master/debuginfo-tests/dexter) to improve user experience.
 - Support more platforms and operating systems (Illumos, FreeBSD, OpenBSD, Windows).
