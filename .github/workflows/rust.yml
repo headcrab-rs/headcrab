@@ -26,6 +26,6 @@ jobs:
     - name: Build
       run: cargo build --verbose
     - name: Build C tests
-      run: cd tests && make
+      run: make -C tests
     - name: Run tests
       run: cargo test --verbose
