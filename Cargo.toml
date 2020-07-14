@@ -12,3 +12,9 @@ readme = "README.md"
 
 [dependencies]
 nix = "0.17.0"
+libproc = "0.7.2"
+libc = "0.2.72"
+
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+mach = "0.3"
+security-framework-sys = "1.0"

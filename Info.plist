@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple Computer//DTD PLIST 1.0//EN" "http://www.apple
+.com/DTDs/PropertyList-1.0.dtd">
+
+<!-- This file sets the required privileges to use task_for_pid function. -->
+
+<plist version="1.0">
+	<dict>
+        <key>CFBundleDevelopmentRegion</key>
+        <string>English</string>
+
+        <key>CFBundleIdentifier</key>
+        <string>com.apple.taskforpid</string>
+
+        <key>CFBundleInfoDictionaryVersion</key>
+        <string>6.0</string>
+
+        <key>CFBundleName</key>
+        <string>taskforpid</string>
+
+        <key>CFBundleVersion</key>
+        <string>1.0</string>
+
+        <key>SecTaskAccess</key>
+        <array>
+			<string>allowed</string>
+			<string>debug</string>
+        </array>
+	</dict>
+</plist>
