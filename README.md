@@ -1,6 +1,6 @@
 # Headcrab
 
-![Linux](https://github.com/headcrab-rs/headcrab/workflows/Rust/badge.svg?branch=master)
+[![Build Status](https://travis-ci.org/headcrab-rs/headcrab.svg?branch=master)](https://travis-ci.org/headcrab-rs/headcrab)
 
 A modern Rust debugging library.
 
