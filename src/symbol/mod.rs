@@ -2,7 +2,6 @@
 // It should be expanded to support multiple data sources.
 
 use gimli::{self, read::EvaluationResult};
-use memmap;
 use object::read::{Object, ObjectSection};
 use std::{borrow::Cow, collections::BTreeMap, fs::File};
 
@@ -59,7 +58,6 @@ impl Dwarf {
             let unit = dwarf.unit(header)?;
             let mut entries = unit.entries();
             while let Some((_, entry)) = entries.next_dfs()? {
-                // If we find an entry for a function, print it.
                 if entry.tag() == gimli::DW_TAG_variable {
                     let name = if let Some(attr) = entry.attr(gimli::DW_AT_name)? {
                         dwarf.attr_string(&unit, attr.value())?.to_string()?

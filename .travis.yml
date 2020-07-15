@@ -1,0 +1,10 @@
+language: rust
+rust:
+  - stable
+cache: cargo
+before_script:
+  - rustup component add clippy
+script:
+  - make -C tests
+  - cargo clippy
+  - cargo test
