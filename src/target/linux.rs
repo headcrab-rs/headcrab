@@ -16,9 +16,12 @@ pub struct Target {
 }
 
 impl Target {
-    /// Launch a new process.
-    /// Returns an opaque target handle.
+    /// Launch a new debuggee process.
+    /// Returns an opaque target handle which you can use to control the debuggee.
     pub fn launch(path: &str) -> Result<Target, Box<dyn std::error::Error>> {
+        // We start the debuggee by forking the parent process.
+        // The child process invokes `ptrace(2)` with the `PTRACE_TRACEME` parameter to enable debugging features for the parent.
+        // This requires a user to have a `SYS_CAP_PTRACE` permission. See `man capabilities(7)` for more information.
         match fork()? {
             ForkResult::Parent { child, .. } => {
                 let _status = waitpid(child, None);
@@ -33,21 +36,21 @@ impl Target {
                 let path = CString::new(path)?;
                 execv(&path, &[])?;
 
-                // execv replaces the process image
+                // execv replaces the process image, so this place in code will not be reached.
                 unreachable!();
             }
         }
     }
 
-    /// Continues execution of a child process.
+    /// Continues execution of a debuggee.
     pub fn unpause(&self) -> Result<(), Box<dyn std::error::Error>> {
         // Read current value
         ptrace::cont(self.pid, None)?;
         Ok(())
     }
 
-    /// Read a string from the child process's memory.
-    /// TODO: move this to a trait blanket impl
+    /// Reads a string from the debuggee's memory.
+    // TODO: move this to a trait blanket impl
     pub fn read_string(
         &self,
         base: usize,
@@ -60,7 +63,9 @@ impl Target {
         Ok(String::from_utf8(read_buf)?)
     }
 
-    /// TODO: move this to a trait blanket impl
+    /// Reads pointer-sized data from the debuggee's memory.
+    /// The size of a result will be platform-dependent (32 or 64 bits).
+    // TODO: move this to a trait blanket impl
     pub fn read_usize(&self, base: usize) -> Result<usize, Box<dyn std::error::Error>> {
         let mut read_buf = [0; mem::size_of::<usize>()];
         let buf_iov = uio::IoVec::from_mut_slice(&mut read_buf);
@@ -76,6 +81,8 @@ impl Target {
     }
 }
 
+/// Returns the start of a process's virtual memory address range.
+/// This can be useful for calculation of relative addresses in memory.
 pub fn get_addr_range(pid: Pid) -> Result<usize, Box<dyn std::error::Error>> {
     let file = File::open(format!("/proc/{}/maps", pid))?;
     let mut bufread = BufReader::new(file);
@@ -88,18 +95,3 @@ pub fn get_addr_range(pid: Pid) -> Result<usize, Box<dyn std::error::Error>> {
 
     Ok(usize::from_str_radix(addr_range[0], 16)?)
 }
-
-/*
-// This works only if we have write permissions for a given address map.
-pub fn write() {
-    // Rewrite the address
-    uio::process_vm_writev(
-        child,
-        &[uio::IoVec::from_slice(&read_buf[0..8])],
-        &[uio::RemoteIoVec {
-            base: OLD_MEM,
-            len: mem::size_of::<usize>(),
-        }],
-    )?;
-}
-*/
