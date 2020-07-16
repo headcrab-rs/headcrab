@@ -1,6 +1,6 @@
 # Headcrab
 
-[![Build Status](https://travis-ci.org/headcrab-rs/headcrab.svg?branch=master)](https://travis-ci.org/headcrab-rs/headcrab)
+[![project chat](https://img.shields.io/badge/zulip-join_chat-brightgreen.svg)](https://headcrab.zulipchat.com) [![Build Status](https://travis-ci.org/headcrab-rs/headcrab.svg?branch=master)](https://travis-ci.org/headcrab-rs/headcrab)
 
 A modern Rust debugging library.
 
@@ -37,6 +37,8 @@ Long-term goals:
 - Support more platforms and operating systems (Illumos, FreeBSD, OpenBSD, Windows).
 
 ## Contributing
+
+You can join the community chat at https://headcrab.zulipchat.com
 
 Please follow the [code of conduct](code_of_conduct.md) for this project.
 
