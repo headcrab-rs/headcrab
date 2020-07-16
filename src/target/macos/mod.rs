@@ -15,6 +15,7 @@ use std::{
 };
 
 // Undocumented flag to disable address space layout randomization.
+// For more information about ASLR, you can refer to https://en.wikipedia.org/wiki/Address_space_layout_randomization
 const _POSIX_SPAWN_DISABLE_ASLR: i32 = 0x0100;
 
 pub struct Target {
@@ -24,8 +25,8 @@ pub struct Target {
 }
 
 impl Target {
-    /// Launch a new process.
-    /// Returns an opaque target handle.
+    /// Launch a new debuggee process.
+    /// Returns an opaque target handle which you can use to control the debuggee.
     pub fn launch(path: &str) -> Result<Target, Box<dyn std::error::Error>> {
         request_authorization()?;
 
@@ -91,7 +92,7 @@ impl Target {
         })
     }
 
-    /// Continues execution of a child process.
+    /// Continues execution of a debuggee.
     pub fn unpause(&self) -> Result<(), Box<dyn std::error::Error>> {
         signal::kill(self.pid, Signal::SIGCONT)?;
         Ok(())
@@ -124,6 +125,7 @@ impl Target {
         Ok(())
     }
 
+    /// Returns a list of maps in the debuggee's virtual adddress space.
     pub fn get_addr_range(&self) -> Result<usize, Box<dyn std::error::Error>> {
         let regs = vmmap::macosx_debug_regions(self.pid, self.port);
         for r in regs {
@@ -140,6 +142,7 @@ impl Target {
         Ok(0)
     }
 
+    /// Reads a string from the debuggee's memory.
     pub fn read_string(
         &self,
         base: usize,
@@ -150,6 +153,8 @@ impl Target {
         Ok(String::from_utf8(read_buf)?)
     }
 
+    /// Reads pointer-sized data from the debuggee's memory.
+    /// The size of a result will be platform-dependent (32 or 64 bits).
     pub fn read_usize(&self, base: usize) -> Result<usize, Box<dyn std::error::Error>> {
         let mut read_buf = [0; mem::size_of::<usize>()];
         self.vm_read(base, mem::size_of::<usize>(), &mut read_buf)?;
@@ -157,6 +162,7 @@ impl Target {
     }
 }
 
+/// Requests task_for_pid privilege for this process.
 fn request_authorization() -> Result<(), Box<dyn std::error::Error>> {
     // TODO: rewrite this ugly ugly code when AuthorizationCopyRights is available is security_framework
 
