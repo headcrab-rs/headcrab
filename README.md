@@ -2,6 +2,8 @@
 
 [![project chat](https://img.shields.io/badge/zulip-join_chat-brightgreen.svg)](https://headcrab.zulipchat.com) [![Build Status](https://travis-ci.org/headcrab-rs/headcrab.svg?branch=master)](https://travis-ci.org/headcrab-rs/headcrab)
 
+[**Contributing**](CONTRIBUTING.md) | [**Documentation**](Documentation) | [**Chat**](https://headcrab.zulipchat.com)
+
 A modern Rust debugging library.
 
 ## Goals
@@ -38,9 +40,8 @@ Long-term goals:
 
 ## Contributing
 
-You can join the community chat at https://headcrab.zulipchat.com
-
-Please follow the [code of conduct](code_of_conduct.md) for this project.
+Please refer to the "[Contributing to Headcrab](CONTRIBUTING.md)" document for more information about how you can help the project.
+You can also join the community chat at https://headcrab.zulipchat.com
 
 Unless you explicitly state otherwise, any contribution intentionally submitted
 for inclusion in the work by you, as defined in the Apache-2.0 license, shall be dual licensed as above, without any
