@@ -98,33 +98,6 @@ impl Target {
         Ok(())
     }
 
-    /// Implements process memory read function.
-    /// This function uses vm_read function from the Mach API.
-    fn vm_read(
-        &self,
-        base: usize,
-        len: usize,
-        data: &mut [u8],
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        unsafe {
-            let mut data_count: message::mach_msg_type_number_t = 0;
-
-            let res = vm::mach_vm_read(
-                self.port,
-                base as mach_vm_address_t,
-                len as mach_vm_size_t,
-                data.as_mut_ptr() as *mut _,
-                &mut data_count,
-            );
-
-            if res != kern_return::KERN_SUCCESS {
-                // TODO: properly wrap error types
-                return Err(Box::new(io::Error::last_os_error()));
-            }
-        }
-        Ok(())
-    }
-
     /// Returns a list of maps in the debuggee's virtual adddress space.
     pub fn get_addr_range(&self) -> Result<usize, Box<dyn std::error::Error>> {
         let regs = vmmap::macosx_debug_regions(self.pid, self.port);
@@ -142,23 +115,73 @@ impl Target {
         Ok(0)
     }
 
-    /// Reads a string from the debuggee's memory.
-    pub fn read_string(
-        &self,
-        base: usize,
-        len: usize,
-    ) -> Result<String, Box<dyn std::error::Error>> {
-        let mut read_buf = vec![0; len];
-        self.vm_read(base, len, &mut read_buf)?;
-        Ok(String::from_utf8(read_buf)?)
+    /// Reads memory from a debuggee process.
+    pub fn read(&self) -> ReadMemory {
+        ReadMemory::new(self.port)
+    }
+}
+
+/// A single memory read operation.
+struct ReadOp {
+    // Remote memory location.
+    remote_base: usize,
+    // Size of the `local_ptr` buffer.
+    len: usize,
+    // Pointer to a local destination buffer.
+    local_ptr: *mut libc::c_void,
+}
+
+/// Allows to read memory from different locations in debuggee's memory as a single operation.
+pub struct ReadMemory {
+    target_port: port::mach_port_name_t,
+    read_ops: Vec<ReadOp>,
+}
+
+impl ReadMemory {
+    fn new(target_port: port::mach_port_name_t) -> ReadMemory {
+        ReadMemory {
+            target_port,
+            read_ops: Vec::new(),
+        }
     }
 
-    /// Reads pointer-sized data from the debuggee's memory.
-    /// The size of a result will be platform-dependent (32 or 64 bits).
-    pub fn read_usize(&self, base: usize) -> Result<usize, Box<dyn std::error::Error>> {
-        let mut read_buf = [0; mem::size_of::<usize>()];
-        self.vm_read(base, mem::size_of::<usize>(), &mut read_buf)?;
-        Ok(usize::from_ne_bytes(read_buf))
+    /// Reads a value of type `T` from debuggee's memory at location `remote_base`.
+    /// This value will be written to the provided variable `val`.
+    /// You should call `apply` in order to execute the memory read operation.
+    // todo: document mem safety - e.g., what happens in the case of partial read
+    pub fn read<T>(mut self, val: &mut T, remote_base: usize) -> Self {
+        self.read_ops.push(ReadOp {
+            remote_base,
+            len: mem::size_of::<T>(),
+            local_ptr: val as *mut T as *mut libc::c_void,
+        });
+
+        self
+    }
+
+    /// Executes the memory read operation.
+    pub fn apply(self) -> Result<(), Box<dyn std::error::Error>> {
+        for read_op in &self.read_ops {
+            unsafe {
+                let mut data_size: mach_vm_size_t = 0;
+
+                let res = vm::mach_vm_read_overwrite(
+                    self.target_port,
+                    read_op.remote_base as mach_vm_address_t,
+                    read_op.len as mach_vm_size_t,
+                    read_op.local_ptr as *mut _ as mach_vm_size_t,
+                    &mut data_size,
+                );
+
+                if res != kern_return::KERN_SUCCESS {
+                    // TODO: account for partial reads
+                    // TODO: properly wrap error types
+                    return Err(Box::new(io::Error::last_os_error()));
+                }
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -217,4 +240,30 @@ fn request_authorization() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ReadMemory;
+    use mach::traps::mach_task_self;
+
+    #[test]
+    fn read_memory() {
+        let var: usize = 52;
+        let var2: u8 = 128;
+
+        let mut read_var_op: usize = 0;
+        let mut read_var2_op: u8 = 0;
+
+        ReadMemory::new(unsafe { mach_task_self() })
+            .read(&mut read_var_op, &var as *const _ as usize)
+            .read(&mut read_var2_op, &var2 as *const _ as usize)
+            .apply()
+            .expect("Failed to apply memop");
+
+        assert_eq!(read_var2_op, var2);
+        assert_eq!(read_var_op, var);
+
+        assert!(true);
+    }
 }

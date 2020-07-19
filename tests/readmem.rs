@@ -22,11 +22,14 @@ fn read_memory() -> Result<(), Box<dyn std::error::Error>> {
     let target = Target::launch(BIN_PATH)?;
 
     // Read pointer
-    let ptr_addr = target.read_usize(str_addr)?;
+    let mut ptr_addr: usize = 0;
+    target.read().read(&mut ptr_addr, str_addr).apply()?;
 
     // Read current value
-    let rval = target.read_string(ptr_addr, 13)?;
-    assert_eq!(rval, "Hello, world!");
+    let mut rval = [0u8; 13];
+    target.read().read(&mut rval, ptr_addr).apply()?;
+
+    assert_eq!(&rval, b"Hello, world!");
 
     target.unpause()?;
 

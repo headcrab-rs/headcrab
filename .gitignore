@@ -1,4 +1,5 @@
 *.*~
 *~
+*.dSYM
 /target
 Cargo.lock
