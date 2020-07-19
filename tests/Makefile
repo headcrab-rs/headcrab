@@ -7,7 +7,7 @@ BINS = $(patsubst %.c,%,$(SRCS))
 all: $(BINS)
 
 %: %.c
-	$(CC) -g -o $@ $^
+	$(CC) -g -no-pie -o $@ $^
 
 clean:
 	rm -f $(BINS)
