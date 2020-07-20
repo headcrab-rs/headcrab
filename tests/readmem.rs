@@ -8,6 +8,8 @@ static BIN_PATH: &str = "./tests/hello";
 #[cfg(target_os = "macos")]
 static MAC_DSYM_PATH: &str = "./tests/hello.dSYM/Contents/Resources/DWARF/hello";
 
+// FIXME: Running this test just for linux because of privileges issue on macOS. Enable for everything after fixing.
+#[cfg(target_os = "linux")]
 #[test]
 fn read_memory() -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(target_os = "macos")]
