@@ -6,7 +6,7 @@ to do so.
 Add linker options to `.cargo/config`:
 
     [build]
-    rustflags = ["-C", "link-args=-sectcreate __TEXT __info_plist Info.plist"]
+    rustflags = ["-C", "link-args=-sectcreate __TEXT __info_plist </path/to/>Info.plist"]
 
 You can check if the section has been added to the binary by running
 
