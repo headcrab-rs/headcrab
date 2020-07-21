@@ -8,7 +8,9 @@ rust:
 cache: cargo
 before_script:
   - rustup component add clippy
+  - rustup component add rustfmt
 script:
+  - cargo fmt --all -- --check
   - make -C tests
   - cargo clippy
   - cargo test
