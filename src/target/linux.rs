@@ -192,7 +192,5 @@ mod tests {
 
         assert_eq!(read_var2_op, var2);
         assert_eq!(read_var_op, var);
-
-        assert!(true);
     }
 }
