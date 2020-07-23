@@ -1,5 +1,6 @@
 //! This is a simple test to read memory from a child process.
 
+#[cfg(target_os = "linux")]
 use headcrab::{symbol::Dwarf, target::Target, target::UnixTarget};
 
 static BIN_PATH: &str = "./tests/testees/hello";

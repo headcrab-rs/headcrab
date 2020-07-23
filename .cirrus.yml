@@ -10,5 +10,6 @@ task:
     - rustup default stable 
   test_script:
     - . $HOME/.cargo/env
+    - cargo build
     - make -C tests
     - cargo test 
