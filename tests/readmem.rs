@@ -2,11 +2,11 @@
 
 use headcrab::{symbol::Dwarf, target::Target};
 
-static BIN_PATH: &str = "./tests/hello";
+static BIN_PATH: &str = "./tests/testees/hello";
 
 // FIXME: this should be an internal impl detail
 #[cfg(target_os = "macos")]
-static MAC_DSYM_PATH: &str = "./tests/hello.dSYM/Contents/Resources/DWARF/hello";
+static MAC_DSYM_PATH: &str = "./tests/testees/hello.dSYM/Contents/Resources/DWARF/hello";
 
 // FIXME: Running this test just for linux because of privileges issue on macOS. Enable for everything after fixing.
 #[cfg(target_os = "linux")]

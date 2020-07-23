@@ -11,6 +11,6 @@ before_script:
   - rustup component add rustfmt
 script:
   - cargo fmt --all -- --check
-  - make -C tests
+  - make -C tests/testees/
   - cargo clippy
   - cargo test
