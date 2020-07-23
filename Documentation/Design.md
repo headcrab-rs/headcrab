@@ -1,4 +1,4 @@
-# High-level Pesign & Plan
+# High-level Design & Plan
 
 ## Phase 1
 
