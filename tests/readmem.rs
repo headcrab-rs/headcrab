@@ -1,6 +1,6 @@
 //! This is a simple test to read memory from a child process.
 
-use headcrab::{symbol::Dwarf, target::Target};
+use headcrab::{symbol::Dwarf, target::Target, target::UnixTarget};
 
 static BIN_PATH: &str = "./tests/testees/hello";
 
@@ -33,7 +33,7 @@ fn read_memory() -> Result<(), Box<dyn std::error::Error>> {
 
     assert_eq!(&rval, b"Hello, world!");
 
-    target.unpause()?;
+    target.unpause(&target)?;
 
     Ok(())
 }

@@ -1,20 +1,14 @@
-use nix::{
-    sys::ptrace,
-    sys::wait::waitpid,
-    unistd::{execv, fork, getpid, ForkResult, Pid},
-};
+use nix::unistd::{getpid, Pid};
 use std::{
-    ffi::CString,
     fs::File,
     io::{BufRead, BufReader},
     mem,
 };
 
+use crate::target::unix::Target;
+
 /// This structure holds the state of a debuggee.
 /// You can use it to read & write debuggee's memory, pause it, set breakpoints, etc.
-pub struct Target {
-    pid: Pid,
-}
 
 impl Target {
     /// Uses this process as a debuggee.
@@ -22,38 +16,38 @@ impl Target {
         Target { pid: getpid() }
     }
 
-    /// Launch a new debuggee process.
-    /// Returns an opaque target handle which you can use to control the debuggee.
-    pub fn launch(path: &str) -> Result<Target, Box<dyn std::error::Error>> {
-        // We start the debuggee by forking the parent process.
-        // The child process invokes `ptrace(2)` with the `PTRACE_TRACEME` parameter to enable debugging features for the parent.
-        // This requires a user to have a `SYS_CAP_PTRACE` permission. See `man capabilities(7)` for more information.
-        match fork()? {
-            ForkResult::Parent { child, .. } => {
-                let _status = waitpid(child, None);
+    // /// Launch a new debuggee process.
+    // /// Returns an opaque target handle which you can use to control the debuggee.
+    // pub fn launch(path: &str) -> Result<Target, Box<dyn std::error::Error>> {
+    //     // We start the debuggee by forking the parent process.
+    //     // The child process invokes `ptrace(2)` with the `PTRACE_TRACEME` parameter to enable debugging features for the parent.
+    //     // This requires a user to have a `SYS_CAP_PTRACE` permission. See `man capabilities(7)` for more information.
+    //     match fork()? {
+    //         ForkResult::Parent { child, .. } => {
+    //             let _status = waitpid(child, None);
 
-                // todo: handle this properly
+    //             // todo: handle this properly
 
-                Ok(Target { pid: child })
-            }
-            ForkResult::Child => {
-                ptrace::traceme()?;
+    //             Ok(Target { pid: child })
+    //         }
+    //         ForkResult::Child => {
+    //             ptrace::traceme()?;
 
-                let path = CString::new(path)?;
-                execv(&path, &[])?;
+    //             let path = CString::new(path)?;
+    //             execv(&path, &[])?;
 
-                // execv replaces the process image, so this place in code will not be reached.
-                unreachable!();
-            }
-        }
-    }
+    //             // execv replaces the process image, so this place in code will not be reached.
+    //             unreachable!();
+    //         }
+    //     }
+    // }
 
-    /// Continues execution of a debuggee.
-    pub fn unpause(&self) -> Result<(), Box<dyn std::error::Error>> {
-        // Read current value
-        ptrace::cont(self.pid, None)?;
-        Ok(())
-    }
+    // /// Continues execution of a debuggee.
+    // pub fn unpause(&self) -> Result<(), Box<dyn std::error::Error>> {
+    //     // Read current value
+    //     ptrace::cont(self.pid, None)?;
+    //     Ok(())
+    // }
 
     /// Reads memory from a debuggee process.
     pub fn read(&self) -> ReadMemory {
