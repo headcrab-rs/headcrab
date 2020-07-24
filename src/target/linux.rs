@@ -5,7 +5,8 @@ use std::{
     mem,
 };
 
-use crate::target::unix::UnixTarget;
+use crate::target::unix::{self, UnixTarget};
+
 /// This structure holds the state of a debuggee on Linux based systems
 /// You can use it to read & write debuggee's memory, pause it, set breakpoints, etc.
 pub struct LinuxTarget {
@@ -22,7 +23,7 @@ impl UnixTarget for LinuxTarget {
 impl LinuxTarget {
     /// Launches a new debuggee process
     pub fn launch(path: &str) -> Result<LinuxTarget, Box<dyn std::error::Error>> {
-        let pid = crate::target::unix::launch(path)?;
+        let pid = unix::launch(path)?;
         Ok(LinuxTarget { pid })
     }
 
