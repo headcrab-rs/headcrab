@@ -5,6 +5,19 @@ use gimli::{self, read::EvaluationResult};
 use object::read::{Object, ObjectSection};
 use std::{borrow::Cow, collections::BTreeMap, fs::File};
 
+macro_rules! dwarf_attr_or_continue {
+    (str($dwarf:ident,$unit:ident) $entry:ident.$name:ident) => {
+        $dwarf.attr_string(&$unit, dwarf_attr_or_continue!($entry.$name).value())?.to_string()?;
+    };
+    ($entry:ident.$name:ident) => {
+        if let Some(attr) = $entry.attr(gimli::$name)? {
+            attr
+        } else {
+            continue;
+        }
+    };
+}
+
 rental! {
     mod inner {
         use super::*;
@@ -97,17 +110,8 @@ impl Dwarf {
                 let mut entries = unit.entries();
                 while let Some((_, entry)) = entries.next_dfs()? {
                     if entry.tag() == gimli::DW_TAG_variable {
-                        let name = if let Some(attr) = entry.attr(gimli::DW_AT_name)? {
-                            dwarf.attr_string(&unit, attr.value())?.to_string()?
-                        } else {
-                            continue;
-                        };
-
-                        let expr = if let Some(attr) = entry.attr(gimli::DW_AT_location)? {
-                            attr.exprloc_value()
-                        } else {
-                            continue;
-                        };
+                        let name = dwarf_attr_or_continue!(str(dwarf, unit) entry.DW_AT_name);
+                        let expr = dwarf_attr_or_continue!(entry.DW_AT_location).exprloc_value();
 
                         // TODO: evaluation should not happen here
                         if let Some(expr) = expr {
