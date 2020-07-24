@@ -7,7 +7,9 @@ use std::{borrow::Cow, collections::BTreeMap, fs::File};
 
 macro_rules! dwarf_attr_or_continue {
     (str($dwarf:ident,$unit:ident) $entry:ident.$name:ident) => {
-        $dwarf.attr_string(&$unit, dwarf_attr_or_continue!($entry.$name).value())?.to_string()?;
+        $dwarf
+            .attr_string(&$unit, dwarf_attr_or_continue!($entry.$name).value())?
+            .to_string()?;
     };
     ($entry:ident.$name:ident) => {
         if let Some(attr) = $entry.attr(gimli::$name)? {
@@ -57,11 +59,11 @@ impl inner::DwarfInner {
 struct ParsedDwarf<'mmap> {
     object: object::File<'mmap>,
     dwarf: gimli::Dwarf<Cow<'mmap, [u8]>>,
+    vars: BTreeMap<String, usize>,
 }
 
 pub struct Dwarf {
     inner: inner::DwarfInner,
-    vars: BTreeMap<String, usize>,
 }
 
 impl Dwarf {
@@ -95,14 +97,20 @@ impl Dwarf {
             // Create `EndianSlice`s for all of the sections.
             let dwarf_cow = gimli::Dwarf::load(loader, sup_loader)?;
 
-            Ok(ParsedDwarf {
-                object,
-                dwarf: dwarf_cow,
-            })
-        })
-        .map_err(|err: rental::RentalError<Box<dyn std::error::Error>, _>| err.0)?;
+            let endian = if object.is_little_endian() {
+                gimli::RunTimeEndian::Little
+            } else {
+                gimli::RunTimeEndian::Big
+            };
 
-        let vars = inner.dwarf::<Result<_, Box<dyn std::error::Error>>, _>(|dwarf| {
+            let borrow_section: &dyn for<'a> Fn(
+                &'a Cow<[u8]>,
+            )
+                -> gimli::EndianSlice<'a, gimli::RunTimeEndian> =
+                &|section| gimli::EndianSlice::new(&*section, endian);
+
+            let dwarf = dwarf_cow.borrow(&borrow_section);
+
             let mut units = dwarf.units();
 
             while let Some(header) = units.next()? {
@@ -127,14 +135,18 @@ impl Dwarf {
                 }
             }
 
-            // DW_TAG_variable
-            Ok(vars)
-        })?;
+            Ok(ParsedDwarf {
+                object,
+                dwarf: dwarf_cow,
+                vars,
+            })
+        })
+        .map_err(|err: rental::RentalError<Box<dyn std::error::Error>, _>| err.0)?;
 
-        Ok(Dwarf { inner, vars })
+        Ok(Dwarf { inner })
     }
 
     pub fn get_var_address(&self, name: &str) -> Option<usize> {
-        self.vars.get(name).cloned()
+        self.inner.rent(|parsed| parsed.vars.get(name).cloned())
     }
 }
