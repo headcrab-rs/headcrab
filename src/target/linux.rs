@@ -37,6 +37,11 @@ impl LinuxTarget {
     pub fn read(&self) -> ReadMemory {
         ReadMemory::new(self.pid())
     }
+
+    /// Reads the register values from the main thread of a debuggee process.
+    pub fn read_regs(&self) -> Result<libc::user_regs_struct, Box<dyn std::error::Error>> {
+        nix::sys::ptrace::getregs(self.pid()).map_err(|err| err.into())
+    }
 }
 
 /// A single memory read operation.

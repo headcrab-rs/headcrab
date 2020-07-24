@@ -1,24 +1,9 @@
 //! This is a simple test to read memory from a child process.
 
-use std::sync::Once;
+mod test_utils;
 
 #[cfg(target_os = "linux")]
 use headcrab::{symbol::Dwarf, target::LinuxTarget, target::UnixTarget};
-
-static TESTEES_BUILD: Once = Once::new();
-
-/// Ensure that all testees are built.
-fn ensure_testees() {
-    TESTEES_BUILD.call_once(|| {
-        let status = std::process::Command::new("make")
-            .current_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/testees"))
-            .spawn()
-            .unwrap()
-            .wait()
-            .unwrap();
-        assert!(status.success());
-    });
-}
 
 static BIN_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/testees/hello");
 
@@ -33,7 +18,7 @@ static MAC_DSYM_PATH: &str = concat!(
 #[cfg(target_os = "linux")]
 #[test]
 fn read_memory() -> Result<(), Box<dyn std::error::Error>> {
-    ensure_testees();
+    test_utils::ensure_testees();
 
     #[cfg(target_os = "macos")]
     let debuginfo = Dwarf::new(MAC_DSYM_PATH)?;

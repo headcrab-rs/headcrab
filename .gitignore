@@ -3,3 +3,4 @@
 *.dSYM
 /target
 Cargo.lock
+.vscode/
