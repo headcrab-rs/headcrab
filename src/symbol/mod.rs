@@ -5,7 +5,49 @@ use gimli::{self, read::EvaluationResult};
 use object::read::{Object, ObjectSection};
 use std::{borrow::Cow, collections::BTreeMap, fs::File};
 
+rental! {
+    mod inner {
+        use super::*;
+
+        #[rental]
+        pub(super) struct DwarfInner {
+            mmap: Box<memmap::Mmap>,
+            parsed: ParsedDwarf<'mmap>,
+        }
+    }
+}
+
+impl inner::DwarfInner {
+    fn dwarf<T, F: FnOnce(gimli::Dwarf<gimli::EndianSlice<gimli::RunTimeEndian>>) -> T>(
+        &self,
+        f: F,
+    ) -> T {
+        self.rent(|parsed| {
+            let endian = if parsed.object.is_little_endian() {
+                gimli::RunTimeEndian::Little
+            } else {
+                gimli::RunTimeEndian::Big
+            };
+
+            let borrow_section: &dyn for<'a> Fn(
+                &'a Cow<[u8]>,
+            )
+                -> gimli::EndianSlice<'a, gimli::RunTimeEndian> =
+                &|section| gimli::EndianSlice::new(&*section, endian);
+
+            let dwarf = parsed.dwarf.borrow(&borrow_section);
+            f(dwarf)
+        })
+    }
+}
+
+struct ParsedDwarf<'mmap> {
+    object: object::File<'mmap>,
+    dwarf: gimli::Dwarf<Cow<'mmap, [u8]>>,
+}
+
 pub struct Dwarf {
+    inner: inner::DwarfInner,
     vars: BTreeMap<String, usize>,
 }
 
@@ -23,70 +65,69 @@ impl Dwarf {
         let file = File::open(path)?;
         let mmap = unsafe { memmap::Mmap::map(&file)? };
 
-        let object = object::File::parse(&*mmap)?;
-        let endian = if object.is_little_endian() {
-            gimli::RunTimeEndian::Little
-        } else {
-            gimli::RunTimeEndian::Big
-        };
+        let inner = inner::DwarfInner::try_new(Box::new(mmap), |mmap| {
+            let object = object::File::parse(&*mmap)?;
 
-        // This can be also processed in parallel.
-        let loader = |id: gimli::SectionId| -> Result<Cow<[u8]>, gimli::Error> {
-            match object.section_by_name(id.name()) {
-                Some(ref section) => Ok(section
-                    .uncompressed_data()
-                    .unwrap_or(Cow::Borrowed(&[][..]))),
-                None => Ok(Cow::Borrowed(&[][..])),
-            }
-        };
-        let sup_loader = |_| Ok(Cow::Borrowed(&[][..])); // we don't need a supplementary object file for now
+            // This can be also processed in parallel.
+            let loader = |id: gimli::SectionId| -> Result<Cow<[u8]>, gimli::Error> {
+                match object.section_by_name(id.name()) {
+                    Some(ref section) => Ok(section
+                        .uncompressed_data()
+                        .unwrap_or(Cow::Borrowed(&[][..]))),
+                    None => Ok(Cow::Borrowed(&[][..])),
+                }
+            };
+            let sup_loader = |_| Ok(Cow::Borrowed(&[][..])); // we don't support supplementary object files for now
 
-        let dwarf_cow = gimli::Dwarf::load(loader, sup_loader)?;
+            // Create `EndianSlice`s for all of the sections.
+            let dwarf_cow = gimli::Dwarf::load(loader, sup_loader)?;
 
-        let borrow_section: &dyn for<'a> Fn(
-            &'a Cow<[u8]>,
-        )
-            -> gimli::EndianSlice<'a, gimli::RunTimeEndian> =
-            &|section| gimli::EndianSlice::new(&*section, endian);
+            Ok(ParsedDwarf {
+                object,
+                dwarf: dwarf_cow,
+            })
+        })
+        .map_err(|err: rental::RentalError<Box<dyn std::error::Error>, _>| err.0)?;
 
-        let dwarf = dwarf_cow.borrow(&borrow_section);
+        let vars = inner.dwarf::<Result<_, Box<dyn std::error::Error>>, _>(|dwarf| {
+            let mut units = dwarf.units();
 
-        // Create `EndianSlice`s for all of the sections.
-        let mut units = dwarf.units();
+            while let Some(header) = units.next()? {
+                let unit = dwarf.unit(header)?;
+                let mut entries = unit.entries();
+                while let Some((_, entry)) = entries.next_dfs()? {
+                    if entry.tag() == gimli::DW_TAG_variable {
+                        let name = if let Some(attr) = entry.attr(gimli::DW_AT_name)? {
+                            dwarf.attr_string(&unit, attr.value())?.to_string()?
+                        } else {
+                            continue;
+                        };
 
-        while let Some(header) = units.next()? {
-            let unit = dwarf.unit(header)?;
-            let mut entries = unit.entries();
-            while let Some((_, entry)) = entries.next_dfs()? {
-                if entry.tag() == gimli::DW_TAG_variable {
-                    let name = if let Some(attr) = entry.attr(gimli::DW_AT_name)? {
-                        dwarf.attr_string(&unit, attr.value())?.to_string()?
-                    } else {
-                        continue;
-                    };
+                        let expr = if let Some(attr) = entry.attr(gimli::DW_AT_location)? {
+                            attr.exprloc_value()
+                        } else {
+                            continue;
+                        };
 
-                    let expr = if let Some(attr) = entry.attr(gimli::DW_AT_location)? {
-                        attr.exprloc_value()
-                    } else {
-                        continue;
-                    };
-
-                    // TODO: evaluation should not happen here
-                    if let Some(expr) = expr {
-                        let mut eval = expr.evaluation(unit.encoding());
-                        match eval.evaluate()? {
-                            EvaluationResult::RequiresRelocatedAddress(reloc_addr) => {
-                                vars.insert(name.to_owned(), reloc_addr as usize);
+                        // TODO: evaluation should not happen here
+                        if let Some(expr) = expr {
+                            let mut eval = expr.evaluation(unit.encoding());
+                            match eval.evaluate()? {
+                                EvaluationResult::RequiresRelocatedAddress(reloc_addr) => {
+                                    vars.insert(name.to_owned(), reloc_addr as usize);
+                                }
+                                _ev_res => {} // do nothing for now
                             }
-                            _ev_res => {} // do nothing for now
                         }
                     }
                 }
             }
-        }
 
-        // DW_TAG_variable
-        Ok(Dwarf { vars })
+            // DW_TAG_variable
+            Ok(vars)
+        })?;
+
+        Ok(Dwarf { inner, vars })
     }
 
     pub fn get_var_address(&self, name: &str) -> Option<usize> {
