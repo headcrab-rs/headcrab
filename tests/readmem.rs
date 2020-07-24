@@ -1,18 +1,40 @@
 //! This is a simple test to read memory from a child process.
 
+use std::sync::Once;
+
 #[cfg(target_os = "linux")]
 use headcrab::{symbol::Dwarf, target::LinuxTarget, target::UnixTarget};
 
-static BIN_PATH: &str = "./tests/testees/hello";
+static TESTEES_BUILD: Once = Once::new();
+
+/// Ensure that all testees are built.
+fn ensure_testees() {
+    TESTEES_BUILD.call_once(|| {
+        let status = std::process::Command::new("make")
+            .current_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/testees"))
+            .spawn()
+            .unwrap()
+            .wait()
+            .unwrap();
+        assert!(status.success());
+    });
+}
+
+static BIN_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/testees/hello");
 
 // FIXME: this should be an internal impl detail
 #[cfg(target_os = "macos")]
-static MAC_DSYM_PATH: &str = "./tests/testees/hello.dSYM/Contents/Resources/DWARF/hello";
+static MAC_DSYM_PATH: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/testees/hello.dSYM/Contents/Resources/DWARF/hello"
+);
 
 // FIXME: Running this test just for linux because of privileges issue on macOS. Enable for everything after fixing.
 #[cfg(target_os = "linux")]
 #[test]
 fn read_memory() -> Result<(), Box<dyn std::error::Error>> {
+    ensure_testees();
+
     #[cfg(target_os = "macos")]
     let debuginfo = Dwarf::new(MAC_DSYM_PATH)?;
     #[cfg(not(target_os = "macos"))]
