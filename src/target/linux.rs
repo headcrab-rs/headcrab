@@ -1,6 +1,7 @@
 mod hardware_breakpoint;
 mod memory;
 mod readmem;
+mod writemem;
 
 use crate::target::thread::Thread;
 use crate::target::unix::{self, UnixTarget};
@@ -18,6 +19,7 @@ pub use hardware_breakpoint::{
     HardwareBreakpoint, HardwareBreakpointError, HardwareBreakpointSize, HardwareBreakpointType,
 };
 pub use readmem::ReadMemory;
+pub use writemem::WriteMemory;
 
 lazy_static::lazy_static! {
     static ref PAGE_SIZE: usize = unsafe { libc::sysconf(libc::_SC_PAGESIZE) as usize };
