@@ -1,6 +1,7 @@
 //! This is a simple test to read memory from a child process.
 
-use headcrab::{symbol::Dwarf, target::Target};
+#[cfg(target_os = "linux")]
+use headcrab::{symbol::Dwarf, target::LinuxTarget, target::UnixTarget};
 
 static BIN_PATH: &str = "./tests/testees/hello";
 
@@ -21,7 +22,7 @@ fn read_memory() -> Result<(), Box<dyn std::error::Error>> {
         .get_var_address("STATICVAR")
         .expect("Expected static var has not been found in the target binary");
 
-    let target = Target::launch(BIN_PATH)?;
+    let target = LinuxTarget::launch(BIN_PATH)?;
 
     // Read pointer
     let mut ptr_addr: usize = 0;

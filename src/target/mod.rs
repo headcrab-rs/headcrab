@@ -1,3 +1,8 @@
+#[cfg(unix)]
+mod unix;
+#[cfg(unix)]
+pub use unix::*;
+
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "linux")]
