@@ -5,53 +5,35 @@ use std::{
     mem,
 };
 
-use crate::target::unix::Target;
-
-/// This structure holds the state of a debuggee.
+use crate::target::unix::UnixTarget;
+/// This structure holds the state of a debuggee on Linux based systems
 /// You can use it to read & write debuggee's memory, pause it, set breakpoints, etc.
+pub struct LinuxTarget {
+    pid: Pid,
+}
 
-impl Target {
-    /// Uses this process as a debuggee.
-    pub fn me() -> Target {
-        Target { pid: getpid() }
+impl UnixTarget for LinuxTarget {
+    /// Provides the Pid of the debugee process
+    fn pid(&self) -> Pid {
+        self.pid
+    }
+}
+
+impl LinuxTarget {
+    /// Launches a new debuggee process
+    pub fn launch(path: &str) -> Result<LinuxTarget, Box<dyn std::error::Error>> {
+        let pid = crate::target::unix::launch(path)?;
+        Ok(LinuxTarget { pid })
     }
 
-    // /// Launch a new debuggee process.
-    // /// Returns an opaque target handle which you can use to control the debuggee.
-    // pub fn launch(path: &str) -> Result<Target, Box<dyn std::error::Error>> {
-    //     // We start the debuggee by forking the parent process.
-    //     // The child process invokes `ptrace(2)` with the `PTRACE_TRACEME` parameter to enable debugging features for the parent.
-    //     // This requires a user to have a `SYS_CAP_PTRACE` permission. See `man capabilities(7)` for more information.
-    //     match fork()? {
-    //         ForkResult::Parent { child, .. } => {
-    //             let _status = waitpid(child, None);
-
-    //             // todo: handle this properly
-
-    //             Ok(Target { pid: child })
-    //         }
-    //         ForkResult::Child => {
-    //             ptrace::traceme()?;
-
-    //             let path = CString::new(path)?;
-    //             execv(&path, &[])?;
-
-    //             // execv replaces the process image, so this place in code will not be reached.
-    //             unreachable!();
-    //         }
-    //     }
-    // }
-
-    // /// Continues execution of a debuggee.
-    // pub fn unpause(&self) -> Result<(), Box<dyn std::error::Error>> {
-    //     // Read current value
-    //     ptrace::cont(self.pid, None)?;
-    //     Ok(())
-    // }
+    /// Uses this process as a debuggee. 
+    pub fn me() -> LinuxTarget {
+        LinuxTarget { pid: getpid() }
+    }
 
     /// Reads memory from a debuggee process.
     pub fn read(&self) -> ReadMemory {
-        ReadMemory::new(self.pid)
+        ReadMemory::new(self.pid())
     }
 }
 
