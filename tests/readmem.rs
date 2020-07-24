@@ -26,11 +26,15 @@ fn read_memory() -> Result<(), Box<dyn std::error::Error>> {
 
     // Read pointer
     let mut ptr_addr: usize = 0;
-    target.read().read(&mut ptr_addr, str_addr).apply()?;
+    unsafe {
+        target.read().read(&mut ptr_addr, str_addr).apply()?;
+    }
 
     // Read current value
     let mut rval = [0u8; 13];
-    target.read().read(&mut rval, ptr_addr).apply()?;
+    unsafe {
+        target.read().read(&mut rval, ptr_addr).apply()?;
+    }
 
     assert_eq!(&rval, b"Hello, world!");
 
