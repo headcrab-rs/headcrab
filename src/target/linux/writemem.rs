@@ -6,7 +6,7 @@ use std::{marker::PhantomData, mem};
 pub struct WriteMemory<'a> {
     pid: Pid,
     write_ops: Vec<WriteOp>,
-    _marker: PhantomData<&'a mut ()>,
+    _marker: PhantomData<&'a ()>,
 }
 
 impl<'a> WriteMemory<'a> {
@@ -18,10 +18,10 @@ impl<'a> WriteMemory<'a> {
         }
     }
 
-    pub fn write<T>(mut self, val: &'a T, remote_base: usize) -> Self {
+    pub fn write<T: ?Sized>(mut self, val: &'a T, remote_base: usize) -> Self {
         self.write_ops.push(WriteOp {
             remote_base,
-            source_len: mem::size_of::<T>(),
+            source_len: mem::size_of_val(val),
             source_ptr: val as *const T as *const libc::c_void,
         });
         self
