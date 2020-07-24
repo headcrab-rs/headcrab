@@ -26,7 +26,7 @@ impl LinuxTarget {
         Ok(LinuxTarget { pid })
     }
 
-    /// Uses this process as a debuggee. 
+    /// Uses this process as a debuggee.
     pub fn me() -> LinuxTarget {
         LinuxTarget { pid: getpid() }
     }

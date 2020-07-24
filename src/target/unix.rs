@@ -4,12 +4,13 @@ use nix::{
     unistd::{execv, fork, ForkResult, Pid},
 };
 use std::ffi::CString;
-/// This trait defines the common behavior for all *nix targets 
+
+/// This trait defines the common behavior for all *nix targets
 pub trait UnixTarget {
     /// Provides the Pid of the debugee process
     fn pid(&self) -> Pid;
 
-    /// Continues execution of a debuggee. 
+    /// Continues execution of a debuggee.
     fn unpause(&self) -> Result<(), Box<dyn std::error::Error>> {
         ptrace::cont(self.pid(), None)?;
         Ok(())
