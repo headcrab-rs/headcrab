@@ -10,6 +10,7 @@ use security_framework_sys::authorization::*;
 use std::{
     ffi::CString,
     io,
+    marker::PhantomData,
     mem::{self, MaybeUninit},
     ptr,
 };
@@ -132,22 +133,26 @@ struct ReadOp {
 }
 
 /// Allows to read memory from different locations in debuggee's memory as a single operation.
-pub struct ReadMemory {
+pub struct ReadMemory<'a> {
     target_port: port::mach_port_name_t,
     read_ops: Vec<ReadOp>,
+    _marker: PhantomData<&'a mut ()>,
 }
 
-impl ReadMemory {
-    fn new(target_port: port::mach_port_name_t) -> ReadMemory {
+impl<'a> ReadMemory<'a> {
+    fn new(target_port: port::mach_port_name_t) -> Self {
         ReadMemory {
             target_port,
             read_ops: Vec::new(),
+            _marker: PhantomData,
         }
     }
 
     /// Reads a value of type `T` from debuggee's memory at location `remote_base`.
     /// This value will be written to the provided variable `val`.
     /// You should call `apply` in order to execute the memory read operation.
+    /// The provided variable `val` can't be accessed until either `apply` is called or `self` is
+    /// dropped.
     ///
     /// # Safety
     ///
@@ -155,7 +160,7 @@ impl ReadMemory {
     /// For example `T` must not be a `bool`, as `transmute::<u8, bool>(2)` is not a valid value for a bool.
     /// In case of doubt, wrap the type in [`mem::MaybeUninit`].
     // todo: further document mem safety - e.g., what happens in the case of partial read
-    pub fn read<T>(mut self, val: &mut T, remote_base: usize) -> Self {
+    pub fn read<T>(mut self, val: &'a mut T, remote_base: usize) -> Self {
         self.read_ops.push(ReadOp {
             remote_base,
             len: mem::size_of::<T>(),
