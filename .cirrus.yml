@@ -1,40 +1,4 @@
 task:
-  name: stable x86_64-unknown-freebsd-10
-  freebsd_instance:
-    image: freebsd-10-4-release-amd64
-  setup_script:
-    - pkg install -y curl
-    - curl https://sh.rustup.rs -sSf --output rustup.sh
-    - sh rustup.sh --default-toolchain stable -y --profile=minimal
-    - . $HOME/.cargo/env
-    - rustup default stable
-    - rustup component add clippy
-    - rustup component add rustfmt
-  test_script:
-    - . $HOME/.cargo/env
-    - cargo fmt --all -- --check
-    - cargo clippy
-    - cargo test
-
-task:
-  name: stable x86_64-unknown-freebsd-11
-  freebsd_instance:
-    image: freebsd-11-3-stable-amd64-v20200213
-  setup_script:
-    - pkg install -y curl
-    - curl https://sh.rustup.rs -sSf --output rustup.sh
-    - sh rustup.sh --default-toolchain stable -y --profile=minimal
-    - . $HOME/.cargo/env
-    - rustup default stable
-    - rustup component add clippy
-    - rustup component add rustfmt
-  test_script:
-    - . $HOME/.cargo/env
-    - cargo fmt --all -- --check
-    - cargo clippy
-    - cargo test
-
-task:
   name: stable x86_64-unknown-freebsd-12
   freebsd_instance:
     image: freebsd-12-1-release-amd64
