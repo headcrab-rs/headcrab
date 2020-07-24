@@ -74,7 +74,7 @@ fn read_memory() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     let str_addr = debuginfo
-        .get_var_address("STATICVAR")
+        .get_var_address("STATICVAR")?
         .expect("Expected static var has not been found in the target binary");
 
     // Read pointer

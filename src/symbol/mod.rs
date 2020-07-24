@@ -71,7 +71,13 @@ type Reader<'a> = gimli::EndianReader<gimli::RunTimeEndian, RcCow<'a, [u8]>>;
 pub struct ParsedDwarf<'a> {
     object: object::File<'a>,
     addr2line: addr2line::Context<Reader<'a>>,
-    vars: BTreeMap<String, usize>,
+    vars: BTreeMap<
+        String,
+        (
+            gimli::CompilationUnitHeader<Reader<'a>>,
+            gimli::Expression<Reader<'a>>,
+        ),
+    >,
     symbols: Vec<Symbol<'a>>,
     symbol_names: HashMap<String, usize>,
 }
@@ -119,23 +125,16 @@ impl<'a> ParsedDwarf<'a> {
 
         let mut vars = BTreeMap::new();
         while let Some(header) = units.next()? {
-            let unit = dwarf.unit(header)?;
+            let unit = dwarf.unit(header.clone())?;
             let mut entries = unit.entries();
             while let Some((_, entry)) = entries.next_dfs()? {
                 if entry.tag() == gimli::DW_TAG_variable {
                     let name =
                         dwarf_attr_or_continue!(str(dwarf, unit) entry.DW_AT_name).into_owned();
-                    let expr = dwarf_attr_or_continue!(entry.DW_AT_location).exprloc_value();
-
-                    // TODO: evaluation should not happen here
-                    if let Some(expr) = expr {
-                        let mut eval = expr.evaluation(unit.encoding());
-                        match eval.evaluate()? {
-                            EvaluationResult::RequiresRelocatedAddress(reloc_addr) => {
-                                vars.insert(name.to_owned(), reloc_addr as usize);
-                            }
-                            _ev_res => {} // do nothing for now
-                        }
+                    if let Some(expr) =
+                        dwarf_attr_or_continue!(entry.DW_AT_location).exprloc_value()
+                    {
+                        vars.insert(name, (header.clone(), expr));
                     }
                 }
             }
@@ -216,8 +215,18 @@ impl<'a> ParsedDwarf<'a> {
         */
     }
 
-    pub fn get_var_address(&self, name: &str) -> Option<usize> {
-        self.vars.get(name).cloned()
+    pub fn get_var_address(&self, name: &str) -> Result<Option<usize>, Box<dyn std::error::Error>> {
+        if let Some((unit_header, expr)) = self.vars.get(name) {
+            let unit = self.addr2line.dwarf().unit(unit_header.clone())?;
+            let mut eval = expr.clone().evaluation(unit.encoding());
+            match eval.evaluate()? {
+                EvaluationResult::RequiresRelocatedAddress(reloc_addr) => {
+                    return Ok(Some(reloc_addr as usize));
+                }
+                _ev_res => {} // do nothing for now
+            }
+        }
+        Ok(None)
     }
 }
 
@@ -301,7 +310,7 @@ impl Dwarf {
         self.rent(|parsed| Some(parsed.get_address_symbol(addr)?.kind()))
     }
 
-    pub fn get_var_address(&self, name: &str) -> Option<usize> {
+    pub fn get_var_address(&self, name: &str) -> Result<Option<usize>, Box<dyn std::error::Error>> {
         self.rent(|parsed| parsed.get_var_address(name))
     }
 }
@@ -454,16 +463,16 @@ impl RelocatedDwarf {
         None
     }
 
-    pub fn get_var_address(&self, name: &str) -> Option<usize> {
+    pub fn get_var_address(&self, name: &str) -> Result<Option<usize>, Box<dyn std::error::Error>> {
         for entry in &self.0 {
-            if let Some(addr) = entry.dwarf.get_var_address(name) {
+            if let Some(addr) = entry.dwarf.get_var_address(name)? {
                 if addr as u64 + entry.bias >= entry.address_range.0 + entry.address_range.1 {
                     continue;
                 }
-                return Some(addr + entry.bias as usize);
+                return Ok(Some(addr + entry.bias as usize));
             }
         }
-        None
+        Ok(None)
     }
 
     pub fn source_location(
