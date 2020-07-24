@@ -1,9 +1,9 @@
 // This module provides a naive implementation of symbolication for the time being.
 // It should be expanded to support multiple data sources.
 
-use gimli::{self, read::EvaluationResult};
+use gimli::read::{EvaluationResult, Reader as _};
 use object::read::{Object, ObjectSection};
-use std::{borrow::Cow, collections::BTreeMap, fs::File};
+use std::{borrow::Cow, collections::BTreeMap, fs::File, rc::Rc};
 
 macro_rules! dwarf_attr_or_continue {
     (str($dwarf:ident,$unit:ident) $entry:ident.$name:ident) => {
@@ -32,33 +32,40 @@ rental! {
     }
 }
 
-impl inner::DwarfInner {
-    fn dwarf<T, F: FnOnce(gimli::Dwarf<gimli::EndianSlice<gimli::RunTimeEndian>>) -> T>(
-        &self,
-        f: F,
-    ) -> T {
-        self.rent(|parsed| {
-            let endian = if parsed.object.is_little_endian() {
-                gimli::RunTimeEndian::Little
-            } else {
-                gimli::RunTimeEndian::Big
-            };
+#[derive(Debug)]
+enum RcCow<'a, T: ?Sized> {
+    Owned(Rc<T>),
+    Borrowed(&'a T),
+}
 
-            let borrow_section: &dyn for<'a> Fn(
-                &'a Cow<[u8]>,
-            )
-                -> gimli::EndianSlice<'a, gimli::RunTimeEndian> =
-                &|section| gimli::EndianSlice::new(&*section, endian);
-
-            let dwarf = parsed.dwarf.borrow(&borrow_section);
-            f(dwarf)
-        })
+impl<T: ?Sized> Clone for RcCow<'_, T> {
+    fn clone(&self) -> Self {
+        match self {
+            RcCow::Owned(rc) => RcCow::Owned(rc.clone()),
+            RcCow::Borrowed(slice) => RcCow::Borrowed(&**slice),
+        }
     }
 }
 
+impl<T: ?Sized> std::ops::Deref for RcCow<'_, T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            RcCow::Owned(rc) => &**rc,
+            RcCow::Borrowed(slice) => &**slice,
+        }
+    }
+}
+
+unsafe impl<T: ?Sized> gimli::StableDeref for RcCow<'_, T> {}
+unsafe impl<T: ?Sized> gimli::CloneStableDeref for RcCow<'_, T> {}
+
+type Reader<'a> = gimli::EndianReader<gimli::RunTimeEndian, RcCow<'a, [u8]>>;
+
 struct ParsedDwarf<'mmap> {
     object: object::File<'mmap>,
-    dwarf: gimli::Dwarf<Cow<'mmap, [u8]>>,
+    dwarf: gimli::Dwarf<Reader<'mmap>>,
     vars: BTreeMap<String, usize>,
 }
 
@@ -81,21 +88,8 @@ impl Dwarf {
         let mmap = unsafe { memmap::Mmap::map(&file)? };
 
         let inner = inner::DwarfInner::try_new(Box::new(mmap), |mmap| {
+            // FIXME extract to function on ParsedDwarf
             let object = object::File::parse(&*mmap)?;
-
-            // This can be also processed in parallel.
-            let loader = |id: gimli::SectionId| -> Result<Cow<[u8]>, gimli::Error> {
-                match object.section_by_name(id.name()) {
-                    Some(ref section) => Ok(section
-                        .uncompressed_data()
-                        .unwrap_or(Cow::Borrowed(&[][..]))),
-                    None => Ok(Cow::Borrowed(&[][..])),
-                }
-            };
-            let sup_loader = |_| Ok(Cow::Borrowed(&[][..])); // we don't support supplementary object files for now
-
-            // Create `EndianSlice`s for all of the sections.
-            let dwarf_cow = gimli::Dwarf::load(loader, sup_loader)?;
 
             let endian = if object.is_little_endian() {
                 gimli::RunTimeEndian::Little
@@ -103,13 +97,27 @@ impl Dwarf {
                 gimli::RunTimeEndian::Big
             };
 
-            let borrow_section: &dyn for<'a> Fn(
-                &'a Cow<[u8]>,
-            )
-                -> gimli::EndianSlice<'a, gimli::RunTimeEndian> =
-                &|section| gimli::EndianSlice::new(&*section, endian);
+            // This can be also processed in parallel.
+            let loader = |id: gimli::SectionId| -> Result<Reader, gimli::Error> {
+                match object.section_by_name(id.name()) {
+                    Some(ref section) => {
+                        let data = section
+                            .uncompressed_data()
+                            .unwrap_or(Cow::Borrowed(&[][..]));
+                        let data = match data {
+                            Cow::Owned(vec) => RcCow::Owned(vec.into()),
+                            Cow::Borrowed(slice) => RcCow::Borrowed(slice),
+                        };
+                        Ok(gimli::EndianReader::new(data, endian))
+                    }
+                    None => Ok(gimli::EndianReader::new(RcCow::Borrowed(&[][..]), endian)),
+                }
+            };
+            // we don't support supplementary object files for now
+            let sup_loader = |_| Ok(gimli::EndianReader::new(RcCow::Borrowed(&[][..]), endian));
 
-            let dwarf = dwarf_cow.borrow(&borrow_section);
+            // Create `EndianSlice`s for all of the sections.
+            let dwarf = gimli::Dwarf::load(loader, sup_loader)?;
 
             let mut units = dwarf.units();
 
@@ -118,7 +126,8 @@ impl Dwarf {
                 let mut entries = unit.entries();
                 while let Some((_, entry)) = entries.next_dfs()? {
                     if entry.tag() == gimli::DW_TAG_variable {
-                        let name = dwarf_attr_or_continue!(str(dwarf, unit) entry.DW_AT_name);
+                        let name =
+                            dwarf_attr_or_continue!(str(dwarf, unit) entry.DW_AT_name).into_owned();
                         let expr = dwarf_attr_or_continue!(entry.DW_AT_location).exprloc_value();
 
                         // TODO: evaluation should not happen here
@@ -137,7 +146,7 @@ impl Dwarf {
 
             Ok(ParsedDwarf {
                 object,
-                dwarf: dwarf_cow,
+                dwarf,
                 vars,
             })
         })
