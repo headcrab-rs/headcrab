@@ -84,8 +84,14 @@ impl ReadMemory {
     /// Reads a value of type `T` from debuggee's memory at location `remote_base`.
     /// This value will be written to the provided variable `val`.
     /// You should call `apply` in order to execute the memory read operation.
-    // todo: document mem safety - e.g., what happens in the case of partial read
-    pub fn read<T>(mut self, val: &mut T, remote_base: usize) -> Self {
+    ///
+    /// # Safety
+    ///
+    /// The type `T` must not have any invalid values.
+    /// For example `T` must not be a `bool`, as `transmute::<u8, bool>(2)` is not a valid value for a bool.
+    /// In case of doubt, wrap the type in [`mem::MaybeUninit`].
+    // todo: further document mem safety - e.g., what happens in the case of partial read
+    pub unsafe fn read<T>(mut self, val: &mut T, remote_base: usize) -> Self {
         self.read_ops.push(ReadOp {
             remote_base,
             len: mem::size_of::<T>(),
@@ -161,11 +167,13 @@ mod tests {
         let mut read_var_op: usize = 0;
         let mut read_var2_op: u8 = 0;
 
-        ReadMemory::new(getpid())
-            .read(&mut read_var_op, &var as *const _ as usize)
-            .read(&mut read_var2_op, &var2 as *const _ as usize)
-            .apply()
-            .expect("Failed to apply memop");
+        unsafe {
+            ReadMemory::new(getpid())
+                .read(&mut read_var_op, &var as *const _ as usize)
+                .read(&mut read_var2_op, &var2 as *const _ as usize)
+                .apply()
+                .expect("Failed to apply memop");
+        }
 
         assert_eq!(read_var2_op, var2);
         assert_eq!(read_var_op, var);
