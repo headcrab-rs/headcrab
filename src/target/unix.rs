@@ -40,3 +40,10 @@ pub(crate) fn launch(path: &str) -> Result<Pid, Box<dyn std::error::Error>> {
         }
     }
 }
+
+/// Attach existing process as a debugee.
+pub(crate) fn attach(pid: Pid) -> Result<(), Box<dyn std::error::Error>> {
+    ptrace::attach(pid)?;
+    let _status = waitpid(pid, None);
+    Ok(())
+}

@@ -28,6 +28,12 @@ impl LinuxTarget {
         Ok(LinuxTarget { pid })
     }
 
+    /// Attaches process as a debugee.
+    pub fn attach(pid: Pid) -> Result<LinuxTarget, Box<dyn std::error::Error>> {
+        unix::attach(pid)?;
+        Ok(LinuxTarget { pid })
+    }
+
     /// Uses this process as a debuggee.
     pub fn me() -> LinuxTarget {
         LinuxTarget { pid: getpid() }
