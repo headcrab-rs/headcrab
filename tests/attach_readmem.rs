@@ -1,15 +1,12 @@
 //! This is a simple test to attach to already running debugee process
 
-use nix::{
-    sys::wait::waitpid,
-    unistd::{execv, fork, ForkResult, Pid},
-};
+use nix::unistd::{execv, fork, ForkResult};
 use std::ffi::CString;
 
 mod test_utils;
 
 #[cfg(target_os = "linux")]
-use headcrab::{symbol::Dwarf, target::LinuxTarget, target::UnixTarget};
+use headcrab::{symbol::Dwarf, target::LinuxTarget};
 
 static BIN_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/testees/longer_hello");
 
