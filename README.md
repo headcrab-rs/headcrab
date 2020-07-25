@@ -1,6 +1,6 @@
 # Headcrab
 
-[![project chat](https://img.shields.io/badge/zulip-join_chat-brightgreen.svg)](https://headcrab.zulipchat.com) [![Build Status](https://travis-ci.org/headcrab-rs/headcrab.svg?branch=master)](https://travis-ci.org/headcrab-rs/headcrab)
+[![project chat](https://img.shields.io/badge/zulip-join_chat-brightgreen.svg)](https://headcrab.zulipchat.com) [![Build Status](https://travis-ci.org/headcrab-rs/headcrab.svg?branch=master)](https://travis-ci.org/headcrab-rs/headcrab) [![Build Status](https://api.cirrus-ci.com/github/headcrab-rs/headcrab.svg?task=stable%20x86_64-unknown-freebsd-12)](https://cirrus-ci.com/github/headcrab-rs/headcrab)
 
 [**Contributing**](CONTRIBUTING.md) | [**Documentation**](Documentation) | [**Chat**](https://headcrab.zulipchat.com)
 
