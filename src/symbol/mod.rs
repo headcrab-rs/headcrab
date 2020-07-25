@@ -2,8 +2,16 @@
 // It should be expanded to support multiple data sources.
 
 use gimli::read::{EvaluationResult, Reader as _};
-use object::read::{Object, ObjectSection};
-use std::{borrow::Cow, collections::BTreeMap, fs::File, rc::Rc};
+use object::{
+    read::{Object, ObjectSection, Symbol},
+    SymbolKind,
+};
+use std::{
+    borrow::Cow,
+    collections::{BTreeMap, HashMap},
+    fs::File,
+    rc::Rc,
+};
 
 macro_rules! dwarf_attr_or_continue {
     (str($dwarf:ident,$unit:ident) $entry:ident.$name:ident) => {
@@ -67,6 +75,8 @@ struct ParsedDwarf<'mmap> {
     object: object::File<'mmap>,
     dwarf: gimli::Dwarf<Reader<'mmap>>,
     vars: BTreeMap<String, usize>,
+    symbols: Vec<Symbol<'mmap>>,
+    symbol_names: HashMap<&'mmap str, usize>,
 }
 
 pub struct Dwarf {
@@ -81,7 +91,6 @@ impl Dwarf {
         // This is completely inefficient and hacky code, but currently it serves the only
         // purpose of getting addresses of static variables.
         // TODO: this will be reworked in a more complete symbolication framework.
-        let mut vars = BTreeMap::new();
 
         // Load ELF/Mach-O object file
         let file = File::open(path)?;
@@ -121,6 +130,7 @@ impl Dwarf {
 
             let mut units = dwarf.units();
 
+            let mut vars = BTreeMap::new();
             while let Some(header) = units.next()? {
                 let unit = dwarf.unit(header)?;
                 let mut entries = unit.entries();
@@ -144,15 +154,87 @@ impl Dwarf {
                 }
             }
 
+            let mut symbols: Vec<_> = object
+                .symbols()
+                .chain(object.dynamic_symbols())
+                .map(|(_, sym)| sym)
+                .filter(|symbol| {
+                    // Copied from `object::read::SymbolMap::filter`
+                    match symbol.kind() {
+                        SymbolKind::Unknown | SymbolKind::Text | SymbolKind::Data => {}
+                        SymbolKind::Null
+                        | SymbolKind::Section
+                        | SymbolKind::File
+                        | SymbolKind::Label
+                        | SymbolKind::Tls => {
+                            return false;
+                        }
+                    }
+                    !symbol.is_undefined()
+                        && symbol.section() != object::SymbolSection::Common
+                        && symbol.size() > 0
+                })
+                .collect();
+            symbols.sort_by_key(|sym| sym.address());
+
+            let mut symbol_names = HashMap::new();
+            for sym in &symbols {
+                if let Some(name) = sym.name() {
+                    symbol_names.insert(name, sym.address() as usize);
+                }
+            }
+
             Ok(ParsedDwarf {
                 object,
                 dwarf,
                 vars,
+                symbols,
+                symbol_names,
             })
         })
         .map_err(|err: rental::RentalError<Box<dyn std::error::Error>, _>| err.0)?;
 
         Ok(Dwarf { inner })
+    }
+
+    pub fn get_symbol_address(&self, name: &str) -> Option<usize> {
+        self.inner
+            .rent(|parsed| parsed.symbol_names.get(name).copied())
+    }
+
+    pub fn get_address_symbol(&self, addr: usize) -> Option<String> {
+        self.inner.rent(|parsed| {
+            let index = match parsed
+                .symbols
+                .binary_search_by(|sym| sym.address().cmp(&(addr as u64)))
+            {
+                // Found an exact match.
+                Ok(index) => index,
+                // Address before the first symbol.
+                Err(0) => return None,
+                // Address between two symbols. `index` is the index of the later of the two.
+                Err(index) => index - 1,
+            };
+            let symbol = &parsed.symbols[index];
+            if parsed.symbols.get(index + 1).map(|sym| sym.address()) <= Some(addr as u64) {
+                return None;
+            }
+            Some(symbol.name()?.to_string())
+
+            // FIXME `size` is wrong in some cases. Once this is solved use the following instead.
+            /*
+            let sym = symbols.binary_search_by(|sym| {
+                use std::cmp::Ordering;
+                if svma < Svma(sym.address()) {
+                    Ordering::Greater
+                } else if svma < Svma(sym.address() + sym.size()) {
+                    Ordering::Equal
+                } else {
+                    Ordering::Less
+                }
+            }).ok().and_then(|idx| symbols.get(idx));
+            */
+        })
     }
 
     pub fn get_var_address(&self, name: &str) -> Option<usize> {
