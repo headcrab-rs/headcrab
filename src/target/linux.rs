@@ -169,6 +169,11 @@ mod tests {
     use super::ReadMemory;
     use nix::unistd::getpid;
 
+    extern crate alloc;
+    use alloc::alloc::{alloc_zeroed, Layout};
+
+    use nix::sys::mman::{mprotect, ProtFlags};
+
     #[test]
     fn read_memory() {
         let var: usize = 52;
@@ -187,5 +192,55 @@ mod tests {
 
         assert_eq!(read_var2_op, var2);
         assert_eq!(read_var_op, var);
+    }
+
+    const PAGE_SIZE: usize = 4096;
+
+    #[test]
+    fn read_protected_memory() {
+        let mut read_var_op: usize = 0;
+
+        unsafe {
+            let ptr = alloc_zeroed(Layout::from_size_align(PAGE_SIZE, PAGE_SIZE).unwrap());
+
+            *(ptr as *mut usize) = 9921;
+
+            mprotect(
+                ptr as *mut std::ffi::c_void,
+                PAGE_SIZE,
+                ProtFlags::PROT_NONE,
+            )
+            .expect("Failed to mprotect");
+
+            ReadMemory::new(getpid())
+                .read(&mut read_var_op, ptr as *const _ as usize)
+                .apply()
+                .expect("Failed to apply memop");
+
+            assert_eq!(9921, read_var_op);
+        }
+    }
+
+    #[test]
+    fn read_cross_page_memory() {
+        let mut read_var_op = [0u32; 2];
+
+        unsafe {
+            let ptr = alloc_zeroed(Layout::from_size_align(PAGE_SIZE * 2, PAGE_SIZE).unwrap());
+
+            let array_ptr = (ptr as usize + PAGE_SIZE - std::mem::size_of::<u32>()) as *mut u8;
+            *(array_ptr as *mut [u32; 2]) = [123, 456];
+
+            let second_page_ptr = (ptr as usize + PAGE_SIZE) as *mut std::ffi::c_void;
+
+            mprotect(second_page_ptr, PAGE_SIZE, ProtFlags::PROT_NONE).expect("Failed to mprotect");
+
+            ReadMemory::new(getpid())
+                .read(&mut read_var_op, array_ptr as *const _ as usize)
+                .apply()
+                .expect("Failed to apply memop");
+
+            assert_eq!([123, 456], read_var_op);
+        }
     }
 }
