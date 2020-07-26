@@ -320,15 +320,22 @@ mod tests {
 
     #[test]
     fn reads_threads() -> Result<(), Box<dyn std::error::Error>> {
-        let barrier = Arc::new(Barrier::new(2));
+        let start_barrier = Arc::new(Barrier::new(2));
+        let end_barrier = Arc::new(Barrier::new(2));
 
-        let t1_barrier = barrier.clone();
+        let t1_start = start_barrier.clone();
+        let t1_end = end_barrier.clone();
+
+        let thread_name = "thread_name";
         let t1_handle = thread::Builder::new()
-            .name("thread-name".to_string())
+            .name(thread_name.to_string())
             .spawn(move || {
-                t1_barrier.wait();
+                t1_start.wait();
+                t1_end.wait();
             })
             .unwrap();
+
+        start_barrier.wait();
 
         let proc = LinuxTarget::me();
         let threads = proc.threads()?;
@@ -356,12 +363,13 @@ mod tests {
 
         // Find thread name
         assert!(
-            threads.iter().any(|(name, _)| name == "thread-name"),
-            "Expected to find main pid={} in {:?}",
-            proc_pid,
+            threads.iter().any(|(name, _)| name == thread_name),
+            "Expected to find thread name={} in {:?}",
+            thread_name,
             threads
         );
-        barrier.wait();
+
+        end_barrier.wait();
         t1_handle.join().unwrap();
         Ok(())
     }
