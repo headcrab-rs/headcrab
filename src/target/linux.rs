@@ -11,11 +11,11 @@ use std::{
 
 struct LinuxThread {
     name: String,
-    id: usize,
+    id: i32,
 }
 
 impl LinuxThread {
-    fn new(name: &str, id: usize) -> LinuxThread {
+    fn new(name: &str, id: i32) -> LinuxThread {
         LinuxThread {
             name: name.to_string(),
             id,
@@ -24,7 +24,7 @@ impl LinuxThread {
 }
 
 impl Thread for LinuxThread {
-    type ThreadId = usize;
+    type ThreadId = i32;
 
     fn name(&self) -> Option<String> {
         Some(self.name.clone())
@@ -78,18 +78,16 @@ impl LinuxTarget {
 
     /// Returns the current snapshot view of this debugee process threads
     #[allow(dead_code)]
-    fn threads(
-        &self,
-    ) -> Result<Vec<Box<dyn Thread<ThreadId = usize>>>, Box<dyn std::error::Error>> {
+    fn threads(&self) -> Result<Vec<Box<dyn Thread<ThreadId = i32>>>, Box<dyn std::error::Error>> {
         let tasks: Vec<_> = Process::new(self.pid.as_raw())?
             .tasks()?
             .flatten()
             .collect();
 
-        let mut result: Vec<Box<dyn Thread<ThreadId = usize>>> = vec![];
+        let mut result: Vec<Box<dyn Thread<ThreadId = i32>>> = vec![];
         for task in tasks {
             let t_stat = task.stat()?;
-            let thread = LinuxThread::new(&t_stat.comm, task.tid as usize);
+            let thread = LinuxThread::new(&t_stat.comm, task.tid);
             result.push(Box::new(thread))
         }
         Ok(result)
@@ -340,7 +338,7 @@ mod tests {
         let proc = LinuxTarget::me();
         let threads = proc.threads()?;
 
-        let threads: Vec<(String, usize)> = threads
+        let threads: Vec<_> = threads
             .iter()
             .map(|t| (t.name().unwrap().clone(), t.thread_id()))
             .collect();
@@ -353,7 +351,7 @@ mod tests {
         );
 
         // Find test pid in result:
-        let proc_pid = proc.pid().as_raw() as usize;
+        let proc_pid = proc.pid().as_raw();
         assert!(
             threads.iter().any(|&(_, tid)| tid == proc_pid),
             "Expected to find main pid={} in {:?}",
