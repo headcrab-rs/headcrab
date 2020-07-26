@@ -9,7 +9,7 @@ static BIN_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/testees/hell
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 #[test]
-fn read_memory() -> Result<(), Box<dyn std::error::Error>> {
+fn read_regs() -> Result<(), Box<dyn std::error::Error>> {
     test_utils::ensure_testees();
 
     let target = LinuxTarget::launch(BIN_PATH)?;
