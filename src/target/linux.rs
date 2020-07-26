@@ -77,8 +77,9 @@ impl LinuxTarget {
     }
 
     /// Returns the current snapshot view of this debugee process threads
-    #[allow(dead_code)]
-    fn threads(&self) -> Result<Vec<Box<dyn Thread<ThreadId = i32>>>, Box<dyn std::error::Error>> {
+    pub fn threads(
+        &self,
+    ) -> Result<Vec<Box<dyn Thread<ThreadId = i32>>>, Box<dyn std::error::Error>> {
         let tasks: Vec<_> = Process::new(self.pid.as_raw())?
             .tasks()?
             .flatten()
