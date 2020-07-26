@@ -15,7 +15,6 @@ nix = "0.17.0"
 libproc = "0.7.2"
 libc = "0.2.72"
 object = "0.20"
-rental = "0.5.5"
 
 # Dependencies specific to macOS & Linux
 [target.'cfg(unix)'.dependencies]

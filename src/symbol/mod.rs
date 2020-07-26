@@ -28,18 +28,6 @@ macro_rules! dwarf_attr_or_continue {
     };
 }
 
-rental! {
-    mod inner {
-        use super::*;
-
-        #[rental]
-        pub(super) struct DwarfInner {
-            mmap: Box<memmap::Mmap>,
-            parsed: ParsedDwarf<'mmap>,
-        }
-    }
-}
-
 #[derive(Debug)]
 enum RcCow<'a, T: ?Sized> {
     Owned(Rc<T>),
@@ -222,34 +210,70 @@ impl<'a> ParsedDwarf<'a> {
     }
 }
 
-pub struct Dwarf {
-    inner: inner::DwarfInner,
-}
+mod inner {
+    use super::*;
+    use std::mem::{self, ManuallyDrop};
 
-impl Dwarf {
-    // todo: impl loader struct instead of taking 'path' as an argument.
-    // It will be required to e.g. load coredumps, or external debug info, or to
-    // communicate with rustc/lang servers.
-    pub fn new(path: &str) -> Result<Dwarf, Box<dyn std::error::Error>> {
-        // Load ELF/Mach-O object file
-        let file = File::open(path)?;
-        let mmap = unsafe { memmap::Mmap::map(&file)? };
-
-        let inner = inner::DwarfInner::try_new(Box::new(mmap), |mmap| ParsedDwarf::new(&*mmap))
-            .map_err(|err: rental::RentalError<Box<dyn std::error::Error>, _>| err.0)?;
-
-        Ok(Dwarf { inner })
+    pub struct Dwarf {
+        _mmap: memmap::Mmap,
+        parsed: ManuallyDrop<ParsedDwarf<'static>>,
     }
 
+    impl Dwarf {
+        // todo: impl loader struct instead of taking 'path' as an argument.
+        // It will be required to e.g. load coredumps, or external debug info, or to
+        // communicate with rustc/lang servers.
+        pub fn new(path: &str) -> Result<Dwarf, Box<dyn std::error::Error>> {
+            // Load ELF/Mach-O object file
+            let file = File::open(path)?;
+
+            // Safety: Not really, this assumes that the backing file will not be truncated or
+            // written to while it is used by us.
+            let mmap = unsafe { memmap::Mmap::map(&file)? };
+
+            let parsed = ManuallyDrop::new(ParsedDwarf::new(&*mmap)?);
+
+            // Safety: `parsed` doesn't outlive `mmap`, from which it borrows, because no reference
+            // to `parsed` can be obtained without the lifetime being shortened to be smaller than
+            // the `Dwarf` that contains both `parsed` and the `mmap` it borrows from.
+            let parsed = unsafe {
+                mem::transmute::<ManuallyDrop<ParsedDwarf<'_>>, ManuallyDrop<ParsedDwarf<'static>>>(
+                    parsed,
+                )
+            };
+
+            Ok(Dwarf {
+                _mmap: mmap,
+                parsed,
+            })
+        }
+
+        pub fn rent<T>(&self, f: impl for<'a> FnOnce(&ParsedDwarf<'a>) -> T) -> T {
+            f(&*self.parsed)
+        }
+    }
+
+    impl Drop for Dwarf {
+        fn drop(&mut self) {
+            unsafe {
+                ManuallyDrop::drop(&mut self.parsed);
+            }
+        }
+    }
+}
+
+pub use inner::Dwarf;
+
+impl Dwarf {
     pub fn get_symbol_address(&self, name: &str) -> Option<usize> {
-        self.inner.rent(|parsed| parsed.get_symbol_address(name))
+        self.rent(|parsed| parsed.get_symbol_address(name))
     }
 
     pub fn get_address_symbol(&self, addr: usize) -> Option<String> {
-        self.inner.rent(|parsed| parsed.get_address_symbol(addr))
+        self.rent(|parsed| parsed.get_address_symbol(addr))
     }
 
     pub fn get_var_address(&self, name: &str) -> Option<usize> {
-        self.inner.rent(|parsed| parsed.get_var_address(name))
+        self.rent(|parsed| parsed.get_var_address(name))
     }
 }
