@@ -169,8 +169,7 @@ mod tests {
     use super::ReadMemory;
     use nix::unistd::getpid;
 
-    extern crate alloc;
-    use alloc::alloc::{alloc_zeroed, Layout};
+    use std::alloc::{alloc_zeroed, dealloc, Layout};
 
     use nix::sys::mman::{mprotect, ProtFlags};
 
@@ -201,7 +200,8 @@ mod tests {
         let mut read_var_op: usize = 0;
 
         unsafe {
-            let ptr = alloc_zeroed(Layout::from_size_align(PAGE_SIZE, PAGE_SIZE).unwrap());
+            let layout = Layout::from_size_align(PAGE_SIZE, PAGE_SIZE).unwrap();
+            let ptr = alloc_zeroed(layout);
 
             *(ptr as *mut usize) = 9921;
 
@@ -222,6 +222,14 @@ mod tests {
                 Ok(()) => panic!("Unexpected result: reading protected memory succeeded"),
                 Err(_) => (),
             }
+
+            mprotect(
+                ptr as *mut std::ffi::c_void,
+                PAGE_SIZE,
+                ProtFlags::PROT_WRITE,
+            )
+            .expect("Failed to mprotect");
+            dealloc(ptr, layout);
         }
     }
 
@@ -230,7 +238,8 @@ mod tests {
         let mut read_var_op = [0u32; 2];
 
         unsafe {
-            let ptr = alloc_zeroed(Layout::from_size_align(PAGE_SIZE * 2, PAGE_SIZE).unwrap());
+            let layout = Layout::from_size_align(PAGE_SIZE * 2, PAGE_SIZE).unwrap();
+            let ptr = alloc_zeroed(layout);
 
             let array_ptr = (ptr as usize + PAGE_SIZE - std::mem::size_of::<u32>()) as *mut u8;
             *(array_ptr as *mut [u32; 2]) = [123, 456];
@@ -247,6 +256,10 @@ mod tests {
             // Expected result because of cross page read
             // FIXME: Change when cross page read is handled correctly
             assert_eq!([123, 0], read_var_op);
+
+            mprotect(second_page_ptr, PAGE_SIZE, ProtFlags::PROT_WRITE)
+                .expect("Failed to mprotect");
+            dealloc(ptr, layout);
         }
     }
 }
