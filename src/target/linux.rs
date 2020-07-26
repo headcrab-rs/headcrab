@@ -76,7 +76,7 @@ impl LinuxTarget {
         nix::sys::ptrace::getregs(self.pid()).map_err(|err| err.into())
     }
 
-    /// Returns the current snapshot view of this debugee process threads
+    /// Returns the current snapshot view of this debugee process threads.
     pub fn threads(
         &self,
     ) -> Result<Vec<Box<dyn Thread<ThreadId = i32>>>, Box<dyn std::error::Error>> {
@@ -344,7 +344,7 @@ mod tests {
             .map(|t| (t.name().unwrap().clone(), t.thread_id()))
             .collect();
 
-        // Find  at least 3 threads (cargo runs a minimum of 2)
+        // Find at least 3 threads (cargo runs a minimum of 2)
         assert!(
             threads.len() >= 3,
             "Expected at least 3 threads in {:?}",
