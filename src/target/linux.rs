@@ -1,4 +1,7 @@
+use crate::target::thread::Thread;
+use crate::target::unix::{self, UnixTarget};
 use nix::unistd::{getpid, Pid};
+use procfs::process::Process;
 use std::{
     fs::File,
     io::{BufRead, BufReader},
@@ -6,7 +9,31 @@ use std::{
     mem,
 };
 
-use crate::target::unix::{self, UnixTarget};
+struct LinuxThread {
+    name: String,
+    id: usize,
+}
+
+impl LinuxThread {
+    fn new(name: &str, id: usize) -> LinuxThread {
+        LinuxThread {
+            name: name.to_string(),
+            id,
+        }
+    }
+}
+
+impl Thread for LinuxThread {
+    type ThreadId = usize;
+
+    fn name(&self) -> Option<String> {
+        Some(self.name.clone())
+    }
+
+    fn thread_id(&self) -> Self::ThreadId {
+        self.id
+    }
+}
 
 /// This structure holds the state of a debuggee on Linux based systems
 /// You can use it to read & write debuggee's memory, pause it, set breakpoints, etc.
@@ -18,6 +45,24 @@ impl UnixTarget for LinuxTarget {
     /// Provides the Pid of the debugee process
     fn pid(&self) -> Pid {
         self.pid
+    }
+
+    /// Returns the current snapshot view of this debugee process threads
+    fn threads(
+        &self,
+    ) -> Result<Vec<Box<dyn Thread<ThreadId = usize>>>, Box<dyn std::error::Error>> {
+        let tasks: Vec<_> = Process::new(self.pid.as_raw())?
+            .tasks()?
+            .flatten()
+            .collect();
+
+        let mut result: Vec<Box<dyn Thread<ThreadId = usize>>> = vec![];
+        for task in tasks {
+            let t_stat = task.stat()?;
+            let thread = LinuxThread::new(&t_stat.comm, task.tid as usize);
+            result.push(Box::new(thread))
+        }
+        Ok(result)
     }
 }
 
@@ -172,8 +217,12 @@ pub fn get_addr_range(pid: Pid) -> Result<usize, Box<dyn std::error::Error>> {
 
 #[cfg(test)]
 mod tests {
-    use super::ReadMemory;
+    use super::*;
+
     use nix::unistd::getpid;
+    use procfs::process::Process;
+    use std::sync::{Arc, Barrier};
+    use std::thread;
 
     use std::alloc::{alloc_zeroed, dealloc, Layout};
 
@@ -267,5 +316,53 @@ mod tests {
                 .expect("Failed to mprotect");
             dealloc(ptr, layout);
         }
+    }
+
+    #[test]
+    fn reads_threads() -> Result<(), Box<dyn std::error::Error>> {
+        let barrier = Arc::new(Barrier::new(2));
+
+        let t1_barrier = barrier.clone();
+        let t1_handle = thread::Builder::new()
+            .name("thread-name".to_string())
+            .spawn(move || {
+                t1_barrier.wait();
+            })
+            .unwrap();
+
+        let proc = LinuxTarget::me();
+        let threads = proc.threads()?;
+
+        let threads: Vec<(String, usize)> = threads
+            .iter()
+            .map(|t| (t.name().unwrap().clone(), t.thread_id()))
+            .collect();
+
+        // Find  at least 3 threads (cargo runs a minimum of 2)
+        assert!(
+            threads.len() >= 3,
+            "Expected at least 3 threads in {:?}",
+            threads
+        );
+
+        // Find test pid in result:
+        let proc_pid = proc.pid().as_raw() as usize;
+        assert!(
+            threads.iter().any(|&(_, tid)| tid == proc_pid),
+            "Expected to find main pid={} in {:?}",
+            proc_pid,
+            threads
+        );
+
+        // Find thread name
+        assert!(
+            threads.iter().any(|(name, _)| name == "thread-name"),
+            "Expected to find main pid={} in {:?}",
+            proc_pid,
+            threads
+        );
+        barrier.wait();
+        t1_handle.join().unwrap();
+        Ok(())
     }
 }
