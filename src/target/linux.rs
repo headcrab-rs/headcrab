@@ -77,6 +77,7 @@ impl LinuxTarget {
     }
 
     /// Returns the current snapshot view of this debugee process threads
+    #[allow(dead_code)]
     fn threads(
         &self,
     ) -> Result<Vec<Box<dyn Thread<ThreadId = usize>>>, Box<dyn std::error::Error>> {
@@ -220,7 +221,6 @@ mod tests {
     use super::*;
 
     use nix::unistd::getpid;
-    use procfs::process::Process;
     use std::sync::{Arc, Barrier};
     use std::thread;
 
