@@ -1,4 +1,3 @@
-use super::thread::Thread;
 use nix::{
     sys::ptrace,
     sys::wait::waitpid,
@@ -16,10 +15,6 @@ pub trait UnixTarget {
         ptrace::cont(self.pid(), None)?;
         Ok(())
     }
-
-    /// Returns the current snapshot view of this debugee process threads
-    fn threads(&self)
-        -> Result<Vec<Box<dyn Thread<ThreadId = usize>>>, Box<dyn std::error::Error>>;
 }
 
 /// Launch a new debuggee process.

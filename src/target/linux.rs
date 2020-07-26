@@ -46,24 +46,6 @@ impl UnixTarget for LinuxTarget {
     fn pid(&self) -> Pid {
         self.pid
     }
-
-    /// Returns the current snapshot view of this debugee process threads
-    fn threads(
-        &self,
-    ) -> Result<Vec<Box<dyn Thread<ThreadId = usize>>>, Box<dyn std::error::Error>> {
-        let tasks: Vec<_> = Process::new(self.pid.as_raw())?
-            .tasks()?
-            .flatten()
-            .collect();
-
-        let mut result: Vec<Box<dyn Thread<ThreadId = usize>>> = vec![];
-        for task in tasks {
-            let t_stat = task.stat()?;
-            let thread = LinuxThread::new(&t_stat.comm, task.tid as usize);
-            result.push(Box::new(thread))
-        }
-        Ok(result)
-    }
 }
 
 impl LinuxTarget {
@@ -92,6 +74,24 @@ impl LinuxTarget {
     /// Reads the register values from the main thread of a debuggee process.
     pub fn read_regs(&self) -> Result<libc::user_regs_struct, Box<dyn std::error::Error>> {
         nix::sys::ptrace::getregs(self.pid()).map_err(|err| err.into())
+    }
+
+    /// Returns the current snapshot view of this debugee process threads
+    fn threads(
+        &self,
+    ) -> Result<Vec<Box<dyn Thread<ThreadId = usize>>>, Box<dyn std::error::Error>> {
+        let tasks: Vec<_> = Process::new(self.pid.as_raw())?
+            .tasks()?
+            .flatten()
+            .collect();
+
+        let mut result: Vec<Box<dyn Thread<ThreadId = usize>>> = vec![];
+        for task in tasks {
+            let t_stat = task.stat()?;
+            let thread = LinuxThread::new(&t_stat.comm, task.tid as usize);
+            result.push(Box::new(thread))
+        }
+        Ok(result)
     }
 }
 
