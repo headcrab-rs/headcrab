@@ -16,6 +16,10 @@ use std::{
     rc::Rc,
 };
 
+mod source;
+
+pub use source::DisassemblySource;
+
 macro_rules! dwarf_attr_or_continue {
     (str($dwarf:ident,$unit:ident) $entry:ident.$name:ident) => {
         $dwarf
