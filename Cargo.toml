@@ -21,6 +21,10 @@ object = "0.20"
 gimli = "0.22.0"
 memmap = "0.7.0"
 
+# Dependencies specific to Linux
+[target.'cfg(target_os="linux")'.dependencies]
+procfs = "0.8.0"
+
 # Dependencies specific to macOS
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
 mach = "0.3"

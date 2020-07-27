@@ -1,4 +1,5 @@
 use nix::unistd::{getpid, Pid};
+use procfs::process::Process;
 use std::{
     fs::File,
     io::{BufRead, BufReader},
@@ -238,12 +239,68 @@ impl<'a> ReadMemory<'a> {
         };
 
         if bytes_read == -1 {
-            // fixme: return a proper error type
-            return Err(Box::new(nix::Error::last()));
+            // Check for errors related to permissions.
+            // todo: restructure the code to be more readable
+            match nix::Error::last() {
+                nix::Error::Sys(nix::errno::Errno::EFAULT) => {
+                    let maps = Process::new(self.pid.as_raw())?.maps()?;
+
+                    let protected_maps = maps
+                        .iter()
+                        .filter(|map| map.perms.chars().nth(0) != Some('r'))
+                        .collect::<Vec<_>>();
+
+                    // Splits readOps to those that read from read protected memory and those that do not.
+                    let (protected, readable): (_, Vec<_>) =
+                        self.read_ops.iter().partition(|read_op| {
+                            protected_maps.iter().any(|map| {
+                                map.address.0 as usize <= read_op.remote_base
+                                    && read_op.remote_base < map.address.1 as usize
+                            })
+                        });
+
+                    // Read data that can be read using libc::process_vm_readv
+                    let remote_iov = readable
+                        .iter()
+                        .map(|read_op| (*read_op).as_remote_iovec())
+                        .collect::<Vec<_>>();
+
+                    let local_iov = readable
+                        .iter()
+                        .map(|read_op| (*read_op).as_local_iovec())
+                        .collect::<Vec<_>>();
+
+                    let bytes_read = unsafe {
+                        // todo: document unsafety
+                        libc::process_vm_readv(
+                            self.pid.into(),
+                            local_iov.as_ptr(),
+                            local_iov.len() as libc::c_ulong,
+                            remote_iov.as_ptr(),
+                            remote_iov.len() as libc::c_ulong,
+                            0,
+                        )
+                    };
+
+                    if bytes_read == -1 {
+                        return Err(Box::new(nix::Error::last()));
+                    }
+
+                    // Read rest of the data using PTRACE_PEEKDATA
+                    for read_op in protected {
+                        unix::read(
+                            self.pid,
+                            read_op.remote_base,
+                            read_op.len,
+                            read_op.local_ptr,
+                        )?;
+                    }
+                }
+                error => return Err(Box::new(error)),
+            }
         }
 
         // fixme: check that it's an expected number of read bytes and account for partial reads
-
         Ok(())
     }
 }
@@ -294,6 +351,7 @@ mod tests {
 
     const PAGE_SIZE: usize = 4096;
 
+    // FIXME: Fork so that PTRACE_PEEKDATA can be used
     #[test]
     fn read_protected_memory() {
         let mut read_var_op: usize = 0;
@@ -332,6 +390,7 @@ mod tests {
         }
     }
 
+    // FIXME: Fork so that PTRACE_PEEKDATA can be used
     #[test]
     fn read_cross_page_memory() {
         let mut read_var_op = [0u32; 2];

@@ -75,3 +75,30 @@ pub(in crate::target) fn attach(pid: Pid) -> Result<WaitStatus, Box<dyn std::err
     let status = waitpid(pid, None)?;
     Ok(status)
 }
+
+/// Read data from debugee memory.
+pub(crate) fn read(
+    pid: Pid,
+    remote_base: usize,
+    len: usize,
+    local_ptr: *mut libc::c_void,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let long_size = std::mem::size_of::<std::os::raw::c_long>();
+
+    for i in 0..(len / long_size + 1) {
+        println!(
+            "{:?}",
+            ptrace::read(pid, (remote_base + long_size * i) as *mut std::ffi::c_void)
+        );
+
+        let data = ptrace::read(pid, (remote_base + long_size * i) as *mut std::ffi::c_void)
+            .or_else(|err| return Err(err))?;
+
+        // todo: document unsafety
+        unsafe {
+            *((local_ptr as usize + long_size * i) as *mut i64) = data;
+        }
+    }
+
+    Ok(())
+}
