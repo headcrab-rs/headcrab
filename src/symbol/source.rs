@@ -40,3 +40,37 @@ impl DisassemblySource {
         Ok(fmt)
     }
 }
+
+impl super::Dwarf {
+    pub fn source_location(
+        &self,
+        addr: usize,
+    ) -> Result<(String, u64, u64), Box<dyn std::error::Error>> {
+        self.rent(|parsed| {
+            let addr2line: &addr2line::Context<_> = &parsed.addr2line;
+            println!("{:08x}", addr);
+            assert!(addr2line.find_dwarf_unit(addr as u64).is_some());
+            let location = addr2line
+                .find_location(addr as u64)?
+                .ok_or_else(|| "source location not found".to_string())?;
+            Ok((
+                location
+                    .file
+                    .ok_or_else(|| "Unknown file".to_string())?
+                    .to_string(),
+                location.line.unwrap_or(0) as u64,
+                location.column.unwrap_or(0) as u64,
+            ))
+        })
+    }
+
+    pub fn source_snippet(&self, addr: usize) -> Result<String, Box<dyn std::error::Error>> {
+        let (file, line, _column) = self.source_location(addr)?;
+        let file = std::fs::read_to_string(file)?;
+        Ok(file
+            .lines()
+            .nth(line as usize)
+            .ok_or_else(|| "Line not found".to_string())?
+            .to_string())
+    }
+}

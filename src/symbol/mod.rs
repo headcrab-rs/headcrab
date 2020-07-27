@@ -68,7 +68,7 @@ type Reader<'a> = gimli::EndianReader<gimli::RunTimeEndian, RcCow<'a, [u8]>>;
 
 pub struct ParsedDwarf<'a> {
     object: object::File<'a>,
-    dwarf: gimli::Dwarf<Reader<'a>>,
+    addr2line: addr2line::Context<Reader<'a>>,
     vars: BTreeMap<String, usize>,
     symbols: Vec<Symbol<'a>>,
     symbol_names: HashMap<&'a str, usize>,
@@ -109,6 +109,9 @@ impl<'a> ParsedDwarf<'a> {
 
         // Create `EndianSlice`s for all of the sections.
         let dwarf = gimli::Dwarf::load(loader, sup_loader)?;
+
+        let addr2line = addr2line::Context::from_dwarf(dwarf)?;
+        let dwarf = addr2line.dwarf();
 
         let mut units = dwarf.units();
 
@@ -166,7 +169,7 @@ impl<'a> ParsedDwarf<'a> {
 
         Ok(ParsedDwarf {
             object,
-            dwarf,
+            addr2line,
             vars,
             symbols,
             symbol_names,
@@ -429,5 +432,35 @@ impl RelocatedDwarf {
             }
         }
         None
+    }
+
+    pub fn source_location(
+        &self,
+        addr: usize,
+    ) -> Result<Option<(String, u64, u64)>, Box<dyn std::error::Error>> {
+        for entry in &self.0 {
+            if (addr as u64) < entry.address_range.0 || addr as u64 >= entry.address_range.1 {
+                continue;
+            }
+            return Ok(Some(
+                entry.dwarf.source_location(addr - entry.bias as usize)?,
+            ));
+        }
+        Ok(None)
+    }
+
+    pub fn source_snippet(
+        &self,
+        addr: usize,
+    ) -> Result<Option<String>, Box<dyn std::error::Error>> {
+        for entry in &self.0 {
+            if (addr as u64) < entry.address_range.0 || addr as u64 >= entry.address_range.1 {
+                continue;
+            }
+            return Ok(Some(
+                entry.dwarf.source_snippet(addr - entry.bias as usize)?,
+            ));
+        }
+        Ok(None)
     }
 }
