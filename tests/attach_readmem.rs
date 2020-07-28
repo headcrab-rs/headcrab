@@ -29,7 +29,11 @@ fn attach_readmem() -> Result<(), Box<dyn std::error::Error>> {
             use std::{thread, time};
             thread::sleep(time::Duration::from_millis(50));
 
-            let target = LinuxTarget::attach(child)?;
+            let (target, status) = LinuxTarget::attach(child)?;
+            match status {
+                nix::sys::wait::WaitStatus::Stopped(_, nix::sys::signal::SIGTRAP) => {}
+                _ => panic!("Status: {:?}", status),
+            }
 
             // Read pointer
             let mut ptr_addr: usize = 0;

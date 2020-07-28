@@ -23,15 +23,19 @@ impl UnixTarget for LinuxTarget {
 
 impl LinuxTarget {
     /// Launches a new debuggee process
-    pub fn launch(path: &str) -> Result<LinuxTarget, Box<dyn std::error::Error>> {
-        let pid = unix::launch(path)?;
-        Ok(LinuxTarget { pid })
+    pub fn launch(
+        path: &str,
+    ) -> Result<(LinuxTarget, nix::sys::wait::WaitStatus), Box<dyn std::error::Error>> {
+        let (pid, status) = unix::launch(path)?;
+        Ok((LinuxTarget { pid }, status))
     }
 
     /// Attaches process as a debugee.
-    pub fn attach(pid: Pid) -> Result<LinuxTarget, Box<dyn std::error::Error>> {
-        unix::attach(pid)?;
-        Ok(LinuxTarget { pid })
+    pub fn attach(
+        pid: Pid,
+    ) -> Result<(LinuxTarget, nix::sys::wait::WaitStatus), Box<dyn std::error::Error>> {
+        let status = unix::attach(pid)?;
+        Ok((LinuxTarget { pid }, status))
     }
 
     /// Uses this process as a debuggee.
