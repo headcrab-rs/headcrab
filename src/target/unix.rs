@@ -33,7 +33,7 @@ pub(crate) fn launch(path: &str) -> Result<Pid, Box<dyn std::error::Error>> {
             ptrace::traceme()?;
 
             let path = CString::new(path)?;
-            execv(&path, &[])?;
+            execv(&path, &[path.as_ref()])?;
 
             // execv replaces the process image, so this place in code will not be reached.
             unreachable!();

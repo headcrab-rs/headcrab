@@ -76,6 +76,81 @@ impl LinuxTarget {
         nix::sys::ptrace::getregs(self.pid()).map_err(|err| err.into())
     }
 
+    /// Writes the register values for the main thread of a debuggee process.
+    pub fn write_regs(
+        &self,
+        regs: libc::user_regs_struct,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        nix::sys::ptrace::setregs(self.pid(), regs).map_err(|err| err.into())
+    }
+
+    /// Let the debuggee process execute the specified syscall.
+    pub fn syscall(
+        &self,
+        num: libc::c_ulonglong,
+        arg1: libc::c_ulonglong,
+        arg2: libc::c_ulonglong,
+        arg3: libc::c_ulonglong,
+        arg4: libc::c_ulonglong,
+        arg5: libc::c_ulonglong,
+        arg6: libc::c_ulonglong,
+    ) -> Result<libc::c_ulonglong, Box<dyn std::error::Error>> {
+        // Write arguments
+        let orig_regs = self.read_regs()?;
+        let mut new_regs = orig_regs.clone();
+        new_regs.rax = num;
+        new_regs.rdi = arg1;
+        new_regs.rsi = arg2;
+        new_regs.rdx = arg3;
+        new_regs.r10 = arg4;
+        new_regs.r8 = arg5;
+        new_regs.r9 = arg6;
+        self.write_regs(new_regs)?;
+
+        // Write syscall instruction
+        // FIXME search for an existing syscall instruction once instead
+        let old_inst = nix::sys::ptrace::read(self.pid(), new_regs.rip as *mut _)?;
+        nix::sys::ptrace::write(
+            self.pid(),
+            new_regs.rip as *mut _,
+            0x050f/*x86_64 syscall*/ as *mut _,
+        )?;
+
+        // Perform syscall
+        nix::sys::ptrace::step(self.pid(), None)?;
+        nix::sys::wait::waitpid(self.pid(), None)?;
+
+        // Read return value
+        let res = self.read_regs()?.rax;
+
+        // Restore old code and registers
+        nix::sys::ptrace::write(self.pid(), new_regs.rip as *mut _, old_inst as *mut _)?;
+        self.write_regs(orig_regs)?;
+
+        Ok(res)
+    }
+
+    /// Let the debuggee process map memory.
+    pub fn mmap(
+        &self,
+        addr: *mut libc::c_void,
+        length: libc::size_t,
+        prot: libc::c_int,
+        flags: libc::c_int,
+        fd: libc::c_int,
+        offset: libc::off_t,
+    ) -> Result<libc::c_ulonglong, Box<dyn std::error::Error>> {
+        self.syscall(
+            libc::SYS_mmap as _,
+            addr as _,
+            length as _,
+            prot as _,
+            flags as _,
+            fd as _,
+            offset as _,
+        )
+    }
+
     /// Returns the current snapshot view of this debugee process threads.
     pub fn threads(
         &self,

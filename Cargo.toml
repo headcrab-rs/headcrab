@@ -29,3 +29,6 @@ procfs = "0.8.0"
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
 mach = "0.3"
 security-framework-sys = "1.0"
+
+[dev-dependencies]
+rustyline = "6.2.0"

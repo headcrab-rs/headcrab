@@ -25,6 +25,40 @@ fn read_memory() -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(not(target_os = "macos"))]
     let debuginfo = Dwarf::new(BIN_PATH)?;
 
+    // Test that `a_function` resolves to a function.
+    let addr = debuginfo.get_symbol_address("a_function");
+    assert!(addr.is_some());
+
+    // Test that the address of `a_function` and one byte further both resolves back to that symbol.
+    assert_eq!(
+        debuginfo
+            .get_address_symbol(addr.unwrap())
+            .as_ref()
+            .map(|name| &**name),
+        Some("a_function")
+    );
+    assert_eq!(
+        debuginfo
+            .get_address_symbol(addr.unwrap() + 1)
+            .as_ref()
+            .map(|name| &**name),
+        Some("a_function")
+    );
+
+    // Test that invalid addresses don't resolve to a symbol.
+    assert_eq!(
+        debuginfo.get_address_symbol(0).as_ref().map(|name| &**name),
+        None,
+    );
+
+    assert_eq!(
+        debuginfo
+            .get_address_symbol(0xffff_ffff_ffff_ffff)
+            .as_ref()
+            .map(|name| &**name),
+        None,
+    );
+
     let str_addr = debuginfo
         .get_var_address("STATICVAR")
         .expect("Expected static var has not been found in the target binary");
