@@ -36,7 +36,7 @@ pub(crate) fn launch(path: &str) -> Result<Pid, Box<dyn std::error::Error>> {
             // Disable ASLR
             #[cfg(target_os = "linux")]
             unsafe {
-                const ADDR_NO_RANDOMIZE: usize = 0x0040000;
+                const ADDR_NO_RANDOMIZE: libc::c_ulong = 0x0040000;
                 libc::personality(ADDR_NO_RANDOMIZE);
             }
 
