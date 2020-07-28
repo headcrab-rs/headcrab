@@ -26,5 +26,9 @@ memmap = "0.7.0"
 mach = "0.3"
 security-framework-sys = "1.0"
 
+# Dependencies specific to Linux
+[target.'cfg(target_os="linux")'.dependencies]
+procfs = "0.8.0"
+
 [dev-dependencies]
 rustyline = "6.2.0"

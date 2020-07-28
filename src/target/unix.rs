@@ -13,6 +13,7 @@ pub trait UnixTarget {
     /// Continues execution of a debuggee.
     fn unpause(&self) -> Result<(), Box<dyn std::error::Error>> {
         ptrace::cont(self.pid(), None)?;
+        waitpid(self.pid(), None).unwrap();
         Ok(())
     }
 }
@@ -31,6 +32,13 @@ pub(crate) fn launch(path: &str) -> Result<Pid, Box<dyn std::error::Error>> {
         }
         ForkResult::Child => {
             ptrace::traceme()?;
+
+            // Disable ASLR
+            #[cfg(target_os = "linux")]
+            unsafe {
+                const ADDR_NO_RANDOMIZE: libc::c_ulong = 0x0040000;
+                libc::personality(ADDR_NO_RANDOMIZE);
+            }
 
             let path = CString::new(path)?;
             execv(&path, &[path.as_ref()])?;

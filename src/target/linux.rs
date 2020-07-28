@@ -123,6 +123,20 @@ impl LinuxTarget {
             offset as _,
         )
     }
+
+    pub fn memory_maps(&self) -> Result<Vec<super::MemoryMap>, Box<dyn std::error::Error>> {
+        Ok(procfs::process::Process::new(self.pid.as_raw())?
+            .maps()?
+            .into_iter()
+            .map(|map| super::MemoryMap {
+                address: map.address,
+                backing_file: match map.pathname {
+                    procfs::process::MMapPath::Path(path) => Some((path, map.offset)),
+                    _ => None,
+                },
+            })
+            .collect())
+    }
 }
 
 /// A single memory read operation.

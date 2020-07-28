@@ -3,7 +3,7 @@
 mod test_utils;
 
 #[cfg(target_os = "linux")]
-use headcrab::{symbol::Dwarf, target::LinuxTarget, target::UnixTarget};
+use headcrab::{symbol::RelocatedDwarf, target::LinuxTarget, target::UnixTarget};
 
 static BIN_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/testees/hello");
 
@@ -20,29 +20,29 @@ static MAC_DSYM_PATH: &str = concat!(
 fn read_memory() -> Result<(), Box<dyn std::error::Error>> {
     test_utils::ensure_testees();
 
-    #[cfg(target_os = "macos")]
-    let debuginfo = Dwarf::new(MAC_DSYM_PATH)?;
-    #[cfg(not(target_os = "macos"))]
-    let debuginfo = Dwarf::new(BIN_PATH)?;
+    let target = LinuxTarget::launch(BIN_PATH)?;
+
+    println!("{:#?}", target.memory_maps()?);
+    let debuginfo = RelocatedDwarf::from_maps(&target.memory_maps()?)?;
 
     // Test that `a_function` resolves to a function.
-    let addr = debuginfo.get_symbol_address("a_function");
-    assert!(addr.is_some());
+    let breakpoint_addr = debuginfo.get_symbol_address("breakpoint");
+    assert!(breakpoint_addr.is_some());
 
     // Test that the address of `a_function` and one byte further both resolves back to that symbol.
     assert_eq!(
         debuginfo
-            .get_address_symbol(addr.unwrap())
+            .get_address_symbol(breakpoint_addr.unwrap())
             .as_ref()
             .map(|name| &**name),
-        Some("a_function")
+        Some("breakpoint")
     );
     assert_eq!(
         debuginfo
-            .get_address_symbol(addr.unwrap() + 1)
+            .get_address_symbol(breakpoint_addr.unwrap() + 1)
             .as_ref()
             .map(|name| &**name),
-        Some("a_function")
+        Some("breakpoint")
     );
 
     // Test that invalid addresses don't resolve to a symbol.
@@ -59,11 +59,37 @@ fn read_memory() -> Result<(), Box<dyn std::error::Error>> {
         None,
     );
 
+    // Write breakpoint to the `breakpoint` function.
+    let mut pause_inst = 0 as libc::c_ulong;
+    unsafe {
+        target
+            .read()
+            .read(&mut pause_inst, breakpoint_addr.unwrap())
+            .apply()?;
+    }
+    // pause (rep nop); ...
+    assert_eq!(&pause_inst.to_ne_bytes()[0..2], &[0xf3, 0x90]);
+    let mut breakpoint_inst = pause_inst.to_ne_bytes();
+    // int3; nop; ...
+    breakpoint_inst[0] = 0xcc;
+    nix::sys::ptrace::write(
+        target.pid(),
+        breakpoint_addr.unwrap() as *mut _,
+        libc::c_ulong::from_ne_bytes(breakpoint_inst) as *mut _,
+    )?;
+
+    // Wait for the breakpoint to get hit.
+    target.unpause().unwrap();
+
+    let ip = target.read_regs().unwrap().rip;
+    assert_eq!(
+        debuginfo.get_address_symbol(ip as usize).as_deref(),
+        Some("breakpoint")
+    );
+
     let str_addr = debuginfo
         .get_var_address("STATICVAR")
         .expect("Expected static var has not been found in the target binary");
-
-    let target = LinuxTarget::launch(BIN_PATH)?;
 
     // Read pointer
     let mut ptr_addr: usize = 0;
