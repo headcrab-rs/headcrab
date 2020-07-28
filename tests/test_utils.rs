@@ -46,7 +46,7 @@ pub fn continue_to_end(target: &LinuxTarget) {
 #[allow(dead_code)]
 pub fn patch_breakpoint(target: &LinuxTarget, debuginfo: &RelocatedDwarf) {
     // Test that `a_function` resolves to a function.
-    let breakpoint_addr = debuginfo.get_symbol_address("breakpoint").unwrap();
+    let breakpoint_addr = debuginfo.get_symbol_address("breakpoint").unwrap() + 4 /* prologue */;
     // Write breakpoint to the `breakpoint` function.
     let mut pause_inst = 0 as libc::c_ulong;
     unsafe {

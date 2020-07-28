@@ -1,5 +1,5 @@
 CC       = rustc
-CC_FLAGS = -g -Copt-level=2
+CC_FLAGS = -g -Copt-level=2 -Cforce-frame-pointers=yes
 SRCS = $(wildcard *.rs)
 BINS = $(patsubst %.rs,%,$(SRCS))
 

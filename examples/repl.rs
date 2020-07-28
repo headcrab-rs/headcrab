@@ -216,6 +216,32 @@ mod example {
                     );
                 }
             }
+            Some("patch") => {
+                context.load_debuginfo_if_necessary()?;
+                // Test that `a_function` resolves to a function.
+                let breakpoint_addr = context.debuginfo().get_symbol_address("breakpoint").unwrap() + 4 /* prologue */;
+                // Write breakpoint to the `breakpoint` function.
+                let mut pause_inst = 0 as libc::c_ulong;
+                unsafe {
+                    context
+                        .remote()?
+                        .read()
+                        .read(&mut pause_inst, breakpoint_addr)
+                        .apply()
+                        .unwrap();
+                }
+                // pause (rep nop); ...
+                assert_eq!(&pause_inst.to_ne_bytes()[0..2], &[0xf3, 0x90]);
+                let mut breakpoint_inst = pause_inst.to_ne_bytes();
+                // int3; nop; ...
+                breakpoint_inst[0] = 0xcc;
+                nix::sys::ptrace::write(
+                    context.remote()?.pid(),
+                    breakpoint_addr as *mut _,
+                    libc::c_ulong::from_ne_bytes(breakpoint_inst) as *mut _,
+                )
+                .unwrap();
+            }
             Some("") | None => {}
             Some(command) => Err(format!("Unknown command `{}`", command))?,
         }
