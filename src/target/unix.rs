@@ -96,16 +96,17 @@ pub(crate) fn read(
             unsafe {
                 *((local_ptr as usize + offset) as *mut i64) = data;
             }
-        } 
-        else {
+        } else {
             unsafe {
-                let previous_bytes: &mut [u8] = std::slice::from_raw_parts_mut((local_ptr as usize + offset) as *mut u8, len-offset);
+                let previous_bytes: &mut [u8] = std::slice::from_raw_parts_mut(
+                    (local_ptr as usize + offset) as *mut u8,
+                    len - offset,
+                );
                 let data_bytes = data.to_ne_bytes();
 
-                for i in 0..(len-offset) {
+                for i in 0..(len - offset) {
                     previous_bytes[i] = data_bytes[i];
                 }
-
             }
         }
 

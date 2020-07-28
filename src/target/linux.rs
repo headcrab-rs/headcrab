@@ -1,6 +1,7 @@
 use nix::unistd::{getpid, Pid};
 use procfs::process::Process;
 use std::{
+    cmp::min,
     fs::File,
     io::{BufRead, BufReader},
     marker::PhantomData,
@@ -170,6 +171,50 @@ impl ReadOp {
             iov_len: self.len,
         }
     }
+
+    /// Splits ReadOp so that each resulting ReadOp resides in only one memory page.
+    fn split_on_page_boundary(&self) -> Vec<ReadOp> {
+        let page_size: usize;
+
+        unsafe {
+            page_size = libc::sysconf(libc::_SC_PAGESIZE) as usize;
+        }
+
+        let mut out = Vec::new();
+
+        let mut left = self.len;
+
+        let to_next_readop = std::cmp::min(left, page_size - ((page_size - 1) & self.remote_base));
+        out.push(ReadOp {
+            remote_base: self.remote_base,
+            len: to_next_readop,
+            local_ptr: self.local_ptr,
+        });
+        left -= to_next_readop;
+
+        loop {
+            if left == 0 {
+                break;
+            }
+            if left < page_size {
+                out.push(ReadOp {
+                    remote_base: self.remote_base + (self.len - left),
+                    len: left,
+                    local_ptr: (self.local_ptr as usize + (self.len - left)) as *mut libc::c_void,
+                });
+                break;
+            } else {
+                out.push(ReadOp {
+                    remote_base: self.remote_base + (self.len - left),
+                    len: page_size,
+                    local_ptr: (self.local_ptr as usize + (self.len - left)) as *mut libc::c_void,
+                });
+                left -= page_size;
+            }
+        }
+
+        out
+    }
 }
 
 /// Allows to read memory from different locations in debuggee's memory as a single operation.
@@ -202,11 +247,14 @@ impl<'a> ReadMemory<'a> {
     /// In case of doubt, wrap the type in [`mem::MaybeUninit`].
     // todo: further document mem safety - e.g., what happens in the case of partial read
     pub unsafe fn read<T>(mut self, val: &'a mut T, remote_base: usize) -> Self {
-        self.read_ops.push(ReadOp {
-            remote_base,
-            len: mem::size_of::<T>(),
-            local_ptr: val as *mut T as *mut libc::c_void,
-        });
+        self.read_ops.append(
+            &mut ReadOp {
+                remote_base,
+                len: mem::size_of::<T>(),
+                local_ptr: val as *mut T as *mut libc::c_void,
+            }
+            .split_on_page_boundary(),
+        );
 
         self
     }
@@ -247,65 +295,58 @@ impl<'a> ReadMemory<'a> {
             )
         };
 
-        if bytes_read == -1 {
-            // Check for errors related to permissions.
-            // todo: restructure the code to be more readable
-            match nix::Error::last() {
-                nix::Error::Sys(nix::errno::Errno::EFAULT) => {
-                    let maps = Process::new(self.pid.as_raw())?.maps()?;
+        if bytes_read < read_len as isize {
+            let maps = Process::new(self.pid.as_raw())?.maps()?;
 
-                    let protected_maps = maps
-                        .iter()
-                        .filter(|map| map.perms.chars().nth(0) != Some('r'))
-                        .collect::<Vec<_>>();
+            let protected_maps = maps
+                .iter()
+                .filter(|map| map.perms.chars().nth(0) != Some('r'))
+                .collect::<Vec<_>>();
 
-                    // Splits readOps to those that read from read protected memory and those that do not.
-                    let (protected, readable): (_, Vec<_>) =
-                        self.read_ops.into_iter().partition(|read_op| {
-                            protected_maps.iter().any(|map| {
-                                map.address.0 as usize <= read_op.remote_base
-                                    && read_op.remote_base < map.address.1 as usize
-                            })
-                        });
+            // Splits readOps to those that read from read protected memory and those that do not.
+            let (protected, readable): (_, Vec<_>) =
+                self.read_ops.into_iter().partition(|read_op| {
+                    protected_maps.iter().any(|map| {
+                        map.address.0 as usize <= read_op.remote_base
+                            && read_op.remote_base < map.address.1 as usize
+                    })
+                });
 
-                    // Read data that can be read using libc::process_vm_readv
-                    let new_remote_iov = readable
-                        .iter()
-                        .map(ReadOp::as_remote_iovec)
-                        .collect::<Vec<_>>();
+            // Read data that can be read using libc::process_vm_readv
+            let new_remote_iov = readable
+                .iter()
+                .map(ReadOp::as_remote_iovec)
+                .collect::<Vec<_>>();
 
-                    let new_local_iov = readable
-                        .iter()
-                        .map(ReadOp::as_local_iovec)
-                        .collect::<Vec<_>>();
+            let new_local_iov = readable
+                .iter()
+                .map(ReadOp::as_local_iovec)
+                .collect::<Vec<_>>();
 
-                    let new_bytes_read = unsafe {
-                        // todo: document unsafety
-                        libc::process_vm_readv(
-                            self.pid.into(),
-                            new_local_iov.as_ptr(),
-                            new_local_iov.len() as libc::c_ulong,
-                            new_remote_iov.as_ptr(),
-                            new_remote_iov.len() as libc::c_ulong,
-                            0,
-                        )
-                    };
+            let new_bytes_read = unsafe {
+                // todo: document unsafety
+                libc::process_vm_readv(
+                    self.pid.into(),
+                    new_local_iov.as_ptr(),
+                    new_local_iov.len() as libc::c_ulong,
+                    new_remote_iov.as_ptr(),
+                    new_remote_iov.len() as libc::c_ulong,
+                    0,
+                )
+            };
 
-                    if new_bytes_read == -1 {
-                        return Err(Box::new(nix::Error::last()));
-                    }
+            if new_bytes_read == -1 {
+                return Err(Box::new(nix::Error::last()));
+            }
 
-                    // Read rest of the data using PTRACE_PEEKDATA
-                    for read_op in protected {
-                        unix::read(
-                            self.pid,
-                            read_op.remote_base,
-                            read_op.len,
-                            read_op.local_ptr,
-                        )?;
-                    }
-                }
-                error => return Err(Box::new(error)),
+            // Read rest of the data using PTRACE_PEEKDATA
+            for read_op in protected {
+                unix::read(
+                    self.pid,
+                    read_op.remote_base,
+                    read_op.len,
+                    read_op.local_ptr,
+                )?;
             }
         }
 
@@ -423,10 +464,14 @@ mod tests {
 
     #[test]
     fn read_cross_page_memory() {
-        let mut read_var_op = [0u32; 2];
+        let mut read_var_op = [0u32; PAGE_SIZE + 2];
+
+        let mut var = [123; PAGE_SIZE + 2];
+        var[0] = 321;
+        var[PAGE_SIZE + 1] = 234;
 
         unsafe {
-            let layout = Layout::from_size_align(PAGE_SIZE * 2, PAGE_SIZE).unwrap();
+            let layout = Layout::from_size_align(PAGE_SIZE * 3, PAGE_SIZE).unwrap();
             let ptr = alloc_zeroed(layout);
 
             let array_ptr = (ptr as usize + PAGE_SIZE - std::mem::size_of::<u32>()) as *mut u8;
@@ -435,12 +480,8 @@ mod tests {
 
             match fork() {
                 Ok(ForkResult::Child) => {
-
-                    *(array_ptr as *mut [u32; 2]) = [123, 456];
-                    mprotect(
-                        second_page_ptr, 
-                        PAGE_SIZE, 
-                        ProtFlags::PROT_WRITE)
+                    *(array_ptr as *mut [u32; PAGE_SIZE + 2]) = var;
+                    mprotect(second_page_ptr, PAGE_SIZE, ProtFlags::PROT_WRITE)
                         .expect("Failed to mprotect");
 
                     // Parent reads memory
@@ -461,8 +502,10 @@ mod tests {
                         .read(&mut read_var_op, array_ptr as *const _ as usize)
                         .apply()
                         .expect("Failed to apply memop");
-    
-                    assert_eq!([123, 456], read_var_op);
+
+                    for i in 0..PAGE_SIZE + 2 {
+                        assert_eq!(var[i], read_var_op[i]);
+                    }
 
                     dealloc(ptr, layout);
 
