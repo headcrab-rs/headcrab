@@ -15,7 +15,12 @@ struct LinuxThread {
 }
 
 impl LinuxThread {
-    fn new(name: &str, id: i32) -> LinuxThread {
+    fn new(name: impl Into<String>, id: i32) -> LinuxThread {
+        LinuxThread {
+            name: name.into(),
+            id,
+        }
+    }
         LinuxThread {
             name: name.to_string(),
             id,
