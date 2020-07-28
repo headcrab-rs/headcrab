@@ -32,14 +32,14 @@ fn read_memory() -> Result<(), Box<dyn std::error::Error>> {
     // Test that the address of `a_function` and one byte further both resolves back to that symbol.
     assert_eq!(
         debuginfo
-            .get_address_symbol(breakpoint_addr.unwrap())
+            .get_address_symbol_name(breakpoint_addr.unwrap())
             .as_ref()
             .map(|name| &**name),
         Some("breakpoint")
     );
     assert_eq!(
         debuginfo
-            .get_address_symbol(breakpoint_addr.unwrap() + 1)
+            .get_address_symbol_name(breakpoint_addr.unwrap() + 1)
             .as_ref()
             .map(|name| &**name),
         Some("breakpoint")
@@ -47,13 +47,13 @@ fn read_memory() -> Result<(), Box<dyn std::error::Error>> {
 
     // Test that invalid addresses don't resolve to a symbol.
     assert_eq!(
-        debuginfo.get_address_symbol(0).as_ref().map(|name| &**name),
+        debuginfo.get_address_symbol_name(0).as_ref().map(|name| &**name),
         None,
     );
 
     assert_eq!(
         debuginfo
-            .get_address_symbol(0xffff_ffff_ffff_ffff)
+            .get_address_symbol_name(0xffff_ffff_ffff_ffff)
             .as_ref()
             .map(|name| &**name),
         None,
@@ -66,7 +66,7 @@ fn read_memory() -> Result<(), Box<dyn std::error::Error>> {
 
     let ip = target.read_regs().unwrap().rip;
     assert_eq!(
-        debuginfo.get_address_symbol(ip as usize).as_deref(),
+        debuginfo.get_address_symbol_name(ip as usize).as_deref(),
         Some("breakpoint")
     );
 

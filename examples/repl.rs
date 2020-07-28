@@ -10,10 +10,14 @@ fn main() {
 
 #[cfg(target_os = "linux")]
 mod example {
-    use headcrab::target::{AttachOptions, LinuxTarget, UnixTarget};
+    use headcrab::{
+        symbol::RelocatedDwarf,
+        target::{AttachOptions, LinuxTarget, UnixTarget},
+    };
 
     struct Context {
         remote: Option<LinuxTarget>,
+        debuginfo: Option<RelocatedDwarf>,
     }
 
     impl Context {
@@ -24,13 +28,34 @@ mod example {
                 Err("No running process".to_string().into())
             }
         }
+
+        fn set_remote(&mut self, remote: LinuxTarget) {
+            // FIXME kill/detach old remote
+            self.remote = Some(remote);
+            self.debuginfo = None;
+        }
+
+        fn load_debuginfo_if_necessary(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+            if self.debuginfo.is_none() {
+                let memory_maps = self.remote()?.memory_maps()?;
+                self.debuginfo = Some(RelocatedDwarf::from_maps(&memory_maps)?);
+            }
+            Ok(())
+        }
+
+        fn debuginfo(&self) -> &RelocatedDwarf {
+            self.debuginfo.as_ref().unwrap()
+        }
     }
 
     pub fn main() {
         let mut rl = rustyline::Editor::<()>::with_config(
             rustyline::Config::builder().auto_add_history(true).build(),
         );
-        let mut context = Context { remote: None };
+        let mut context = Context {
+            remote: None,
+            debuginfo: None,
+        };
 
         let mut cmds = vec![];
         let mut exec_cmd = None;
@@ -73,7 +98,7 @@ mod example {
 
         if let Some(exec_cmd) = exec_cmd {
             println!("Starting program: {}", exec_cmd);
-            context.remote = Some(match LinuxTarget::launch(&exec_cmd) {
+            context.set_remote(match LinuxTarget::launch(&exec_cmd) {
                 Ok((target, status)) => {
                     println!("{:?}", status);
                     target
@@ -130,8 +155,7 @@ mod example {
                     println!("Starting program: {}", cmd);
                     let (remote, status) = LinuxTarget::launch(cmd)?;
                     println!("{:?}", status);
-                    // FIXME detach or kill old remote
-                    context.remote = Some(remote);
+                    context.set_remote(remote);
                 }
             }
             Some("attach") => {
@@ -146,7 +170,7 @@ mod example {
                     )?;
                     println!("{:?}", status);
                     // FIXME detach or kill old remote
-                    context.remote = Some(remote);
+                    context.set_remote(remote);
                 }
             }
             Some("detach") => {
@@ -163,6 +187,35 @@ mod example {
                     "Expected subcommand found nothing. Try `regs read`"
                 ))?,
             },
+            Some("bt") | Some("backtrace") => {
+                context.load_debuginfo_if_necessary()?;
+
+                let sp = context.remote()?.read_regs().unwrap().rsp;
+
+                // Read stack
+                let mut stack: [usize; 1024] = [0; 1024];
+                unsafe {
+                    context
+                        .remote()?
+                        .read()
+                        .read(&mut stack, sp as usize)
+                        .apply()?;
+                }
+
+                for func in
+                    headcrab::symbol::unwind::naive_unwinder(context.debuginfo(), &stack[..])
+                {
+                    println!(
+                        "{:016x} {}",
+                        func,
+                        context
+                            .debuginfo()
+                            .get_address_symbol_name(func)
+                            .as_deref()
+                            .unwrap_or("<unknown>")
+                    );
+                }
+            }
             Some("") | None => {}
             Some(command) => Err(format!("Unknown command `{}`", command))?,
         }

@@ -1,5 +1,7 @@
-// This module provides a naive implementation of symbolication for the time being.
-// It should be expanded to support multiple data sources.
+//! This module provides a naive implementation of symbolication for the time being.
+//! It should be expanded to support multiple data sources.
+
+pub mod unwind;
 
 use gimli::read::{EvaluationResult, Reader as _};
 use object::{
@@ -173,7 +175,7 @@ impl<'a> ParsedDwarf<'a> {
         self.symbol_names.get(name).copied()
     }
 
-    pub fn get_address_symbol(&self, addr: usize) -> Option<String> {
+    pub fn get_address_symbol(&self, addr: usize) -> Option<object::Symbol> {
         let index = match self
             .symbols
             .binary_search_by(|sym| sym.address().cmp(&(addr as u64)))
@@ -189,7 +191,7 @@ impl<'a> ParsedDwarf<'a> {
         if self.symbols.get(index + 1).map(|sym| sym.address()) <= Some(addr as u64) {
             return None;
         }
-        Some(symbol.name()?.to_string())
+        Some(symbol.clone())
 
         // FIXME `size` is wrong in some cases. Once this is solved use the following instead.
         /*
@@ -272,8 +274,12 @@ impl Dwarf {
         self.rent(|parsed| parsed.get_symbol_address(name))
     }
 
-    pub fn get_address_symbol(&self, addr: usize) -> Option<String> {
-        self.rent(|parsed| parsed.get_address_symbol(addr))
+    pub fn get_address_symbol_name(&self, addr: usize) -> Option<String> {
+        self.rent(|parsed| Some(parsed.get_address_symbol(addr)?.name()?.to_string()))
+    }
+
+    pub fn get_address_symbol_kind(&self, addr: usize) -> Option<SymbolKind> {
+        self.rent(|parsed| Some(parsed.get_address_symbol(addr)?.kind()))
     }
 
     pub fn get_var_address(&self, name: &str) -> Option<usize> {
@@ -387,12 +393,22 @@ impl RelocatedDwarf {
         None
     }
 
-    pub fn get_address_symbol(&self, addr: usize) -> Option<String> {
+    pub fn get_address_symbol_name(&self, addr: usize) -> Option<String> {
         for entry in &self.0 {
             if (addr as u64) < entry.address_range.0 || addr as u64 >= entry.address_range.1 {
                 continue;
             }
-            return entry.dwarf.get_address_symbol(addr - entry.bias as usize);
+            return entry.dwarf.get_address_symbol_name(addr - entry.bias as usize);
+        }
+        None
+    }
+
+    pub fn get_address_symbol_kind(&self, addr: usize) -> Option<SymbolKind> {
+        for entry in &self.0 {
+            if (addr as u64) < entry.address_range.0 || addr as u64 >= entry.address_range.1 {
+                continue;
+            }
+            return entry.dwarf.get_address_symbol_kind(addr - entry.bias as usize);
         }
         None
     }
