@@ -365,10 +365,10 @@ mod tests {
 
     #[test]
     fn read_protected_memory() {
-        let mut read_var1_op: usize = 0;
+        let mut read_var1_op: u8 = 0;
         let mut read_var2_op: usize = 0;
 
-        let var1: usize = 1;
+        let var1: u8 = 1;
         let var2: usize = 2;
 
         let layout = Layout::from_size_align(2 * PAGE_SIZE, PAGE_SIZE).unwrap();
@@ -378,7 +378,7 @@ mod tests {
 
             match fork() {
                 Ok(ForkResult::Child) => {
-                    *(ptr as *mut usize) = var1;
+                    *(ptr as *mut u8) = var1;
 
                     mprotect(
                         ptr as *mut std::ffi::c_void,
@@ -435,8 +435,12 @@ mod tests {
 
             match fork() {
                 Ok(ForkResult::Child) => {
+
                     *(array_ptr as *mut [u32; 2]) = [123, 456];
-                    mprotect(second_page_ptr, PAGE_SIZE, ProtFlags::PROT_WRITE)
+                    mprotect(
+                        second_page_ptr, 
+                        PAGE_SIZE, 
+                        ProtFlags::PROT_WRITE)
                         .expect("Failed to mprotect");
 
                     // Parent reads memory
@@ -457,7 +461,7 @@ mod tests {
                         .read(&mut read_var_op, array_ptr as *const _ as usize)
                         .apply()
                         .expect("Failed to apply memop");
-
+    
                     assert_eq!([123, 456], read_var_op);
 
                     dealloc(ptr, layout);

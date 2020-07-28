@@ -85,14 +85,31 @@ pub(crate) fn read(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let long_size = std::mem::size_of::<std::os::raw::c_long>();
 
-    for i in 0..(len / long_size) {
-        let data = ptrace::read(pid, (remote_base + long_size * i) as *mut std::ffi::c_void)
+    let mut offset: usize = 0;
+
+    while offset < len {
+        let data = ptrace::read(pid, (remote_base + offset) as *mut std::ffi::c_void)
             .or_else(|err| return Err(err))?;
 
-        // todo: document unsafety
-        unsafe {
-            *((local_ptr as usize + long_size * i) as *mut i64) = data;
+        if (len - offset) >= long_size {
+            // todo: document unsafety
+            unsafe {
+                *((local_ptr as usize + offset) as *mut i64) = data;
+            }
+        } 
+        else {
+            unsafe {
+                let previous_bytes: &mut [u8] = std::slice::from_raw_parts_mut((local_ptr as usize + offset) as *mut u8, len-offset);
+                let data_bytes = data.to_ne_bytes();
+
+                for i in 0..(len-offset) {
+                    previous_bytes[i] = data_bytes[i];
+                }
+
+            }
         }
+
+        offset += long_size;
     }
 
     Ok(())
