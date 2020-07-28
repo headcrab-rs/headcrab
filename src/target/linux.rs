@@ -21,11 +21,6 @@ impl LinuxThread {
             id,
         }
     }
-        LinuxThread {
-            name: name.to_string(),
-            id,
-        }
-    }
 }
 
 impl Thread for LinuxThread {
