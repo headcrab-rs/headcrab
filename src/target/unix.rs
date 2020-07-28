@@ -85,12 +85,7 @@ pub(crate) fn read(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let long_size = std::mem::size_of::<std::os::raw::c_long>();
 
-    for i in 0..(len / long_size + 1) {
-        println!(
-            "{:?}",
-            ptrace::read(pid, (remote_base + long_size * i) as *mut std::ffi::c_void)
-        );
-
+    for i in 0..(len / long_size) {
         let data = ptrace::read(pid, (remote_base + long_size * i) as *mut std::ffi::c_void)
             .or_else(|err| return Err(err))?;
 

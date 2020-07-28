@@ -226,6 +226,15 @@ impl<'a> ReadMemory<'a> {
             .map(ReadOp::as_local_iovec)
             .collect::<Vec<_>>();
 
+        let read_len = self
+            .read_ops
+            .iter()
+            .fold(0, |sum, read_op| sum + read_op.len);
+
+        if read_len > isize::MAX as usize {
+            panic!("Read size too big");
+        };
+
         let bytes_read = unsafe {
             // todo: document unsafety
             libc::process_vm_readv(
@@ -252,7 +261,7 @@ impl<'a> ReadMemory<'a> {
 
                     // Splits readOps to those that read from read protected memory and those that do not.
                     let (protected, readable): (_, Vec<_>) =
-                        self.read_ops.iter().partition(|read_op| {
+                        self.read_ops.into_iter().partition(|read_op| {
                             protected_maps.iter().any(|map| {
                                 map.address.0 as usize <= read_op.remote_base
                                     && read_op.remote_base < map.address.1 as usize
@@ -260,29 +269,29 @@ impl<'a> ReadMemory<'a> {
                         });
 
                     // Read data that can be read using libc::process_vm_readv
-                    let remote_iov = readable
+                    let new_remote_iov = readable
                         .iter()
-                        .map(|read_op| (*read_op).as_remote_iovec())
+                        .map(ReadOp::as_remote_iovec)
                         .collect::<Vec<_>>();
 
-                    let local_iov = readable
+                    let new_local_iov = readable
                         .iter()
-                        .map(|read_op| (*read_op).as_local_iovec())
+                        .map(ReadOp::as_local_iovec)
                         .collect::<Vec<_>>();
 
-                    let bytes_read = unsafe {
+                    let new_bytes_read = unsafe {
                         // todo: document unsafety
                         libc::process_vm_readv(
                             self.pid.into(),
-                            local_iov.as_ptr(),
-                            local_iov.len() as libc::c_ulong,
-                            remote_iov.as_ptr(),
-                            remote_iov.len() as libc::c_ulong,
+                            new_local_iov.as_ptr(),
+                            new_local_iov.len() as libc::c_ulong,
+                            new_remote_iov.as_ptr(),
+                            new_remote_iov.len() as libc::c_ulong,
                             0,
                         )
                     };
 
-                    if bytes_read == -1 {
+                    if new_bytes_read == -1 {
                         return Err(Box::new(nix::Error::last()));
                     }
 
@@ -322,12 +331,15 @@ pub fn get_addr_range(pid: Pid) -> Result<usize, Box<dyn std::error::Error>> {
 
 #[cfg(test)]
 mod tests {
-    use super::ReadMemory;
-    use nix::unistd::getpid;
+    use super::{LinuxTarget, ReadMemory};
+    use nix::unistd::{fork, getpid, ForkResult};
 
     use std::alloc::{alloc_zeroed, dealloc, Layout};
 
-    use nix::sys::mman::{mprotect, ProtFlags};
+    use nix::sys::{
+        mman::{mprotect, ProtFlags},
+        ptrace, signal, wait,
+    };
 
     #[test]
     fn read_memory() {
@@ -351,46 +363,64 @@ mod tests {
 
     const PAGE_SIZE: usize = 4096;
 
-    // FIXME: Fork so that PTRACE_PEEKDATA can be used
     #[test]
     fn read_protected_memory() {
-        let mut read_var_op: usize = 0;
+        let mut read_var1_op: usize = 0;
+        let mut read_var2_op: usize = 0;
+
+        let var1: usize = 1;
+        let var2: usize = 2;
+
+        let layout = Layout::from_size_align(2 * PAGE_SIZE, PAGE_SIZE).unwrap();
 
         unsafe {
-            let layout = Layout::from_size_align(PAGE_SIZE, PAGE_SIZE).unwrap();
             let ptr = alloc_zeroed(layout);
 
-            *(ptr as *mut usize) = 9921;
+            match fork() {
+                Ok(ForkResult::Child) => {
+                    *(ptr as *mut usize) = var1;
 
-            mprotect(
-                ptr as *mut std::ffi::c_void,
-                PAGE_SIZE,
-                ProtFlags::PROT_NONE,
-            )
-            .expect("Failed to mprotect");
+                    mprotect(
+                        ptr as *mut std::ffi::c_void,
+                        PAGE_SIZE,
+                        ProtFlags::PROT_WRITE,
+                    )
+                    .expect("Failed to mprotect");
 
-            let res = ReadMemory::new(getpid())
-                .read(&mut read_var_op, ptr as *const _ as usize)
-                .apply();
+                    // Parent reads memory
 
-            // Expected to fail when reading read-protected memory.
-            // FIXME: Change when reading read-protected memory is handled properly
-            match res {
-                Ok(()) => panic!("Unexpected result: reading protected memory succeeded"),
-                Err(_) => (),
+                    use std::{thread, time};
+                    thread::sleep(time::Duration::from_millis(300));
+
+                    dealloc(ptr, layout);
+                }
+                Ok(ForkResult::Parent { child, .. }) => {
+                    use std::{thread, time};
+                    thread::sleep(time::Duration::from_millis(100));
+
+                    let target = LinuxTarget::attach(child).expect("Couldn't attach to child");
+
+                    target
+                        .read()
+                        .read(&mut read_var1_op, ptr as *const _ as usize)
+                        .read(&mut read_var2_op, &var2 as *const _ as usize)
+                        .apply()
+                        .expect("ReadMemory failed");
+
+                    assert_eq!(std::ptr::read_volatile(&read_var1_op), var1);
+                    assert_eq!(std::ptr::read_volatile(&read_var2_op), var2);
+
+                    dealloc(ptr, layout);
+
+                    ptrace::cont(child, Some(signal::Signal::SIGCONT)).unwrap();
+
+                    wait::waitpid(child, None).unwrap();
+                }
+                Err(x) => panic!(x),
             }
-
-            mprotect(
-                ptr as *mut std::ffi::c_void,
-                PAGE_SIZE,
-                ProtFlags::PROT_WRITE,
-            )
-            .expect("Failed to mprotect");
-            dealloc(ptr, layout);
         }
     }
 
-    // FIXME: Fork so that PTRACE_PEEKDATA can be used
     #[test]
     fn read_cross_page_memory() {
         let mut read_var_op = [0u32; 2];
@@ -400,24 +430,44 @@ mod tests {
             let ptr = alloc_zeroed(layout);
 
             let array_ptr = (ptr as usize + PAGE_SIZE - std::mem::size_of::<u32>()) as *mut u8;
-            *(array_ptr as *mut [u32; 2]) = [123, 456];
 
             let second_page_ptr = (ptr as usize + PAGE_SIZE) as *mut std::ffi::c_void;
 
-            mprotect(second_page_ptr, PAGE_SIZE, ProtFlags::PROT_NONE).expect("Failed to mprotect");
+            match fork() {
+                Ok(ForkResult::Child) => {
+                    *(array_ptr as *mut [u32; 2]) = [123, 456];
+                    mprotect(second_page_ptr, PAGE_SIZE, ProtFlags::PROT_WRITE)
+                        .expect("Failed to mprotect");
 
-            ReadMemory::new(getpid())
-                .read(&mut read_var_op, array_ptr as *const _ as usize)
-                .apply()
-                .expect("Failed to apply memop");
+                    // Parent reads memory
 
-            // Expected result because of cross page read
-            // FIXME: Change when cross page read is handled correctly
-            assert_eq!([123, 0], read_var_op);
+                    use std::{thread, time};
+                    thread::sleep(time::Duration::from_millis(300));
 
-            mprotect(second_page_ptr, PAGE_SIZE, ProtFlags::PROT_WRITE)
-                .expect("Failed to mprotect");
-            dealloc(ptr, layout);
+                    dealloc(ptr, layout);
+                }
+                Ok(ForkResult::Parent { child, .. }) => {
+                    use std::{thread, time};
+                    thread::sleep(time::Duration::from_millis(100));
+
+                    let target = LinuxTarget::attach(child).expect("Couldn't attach to child");
+
+                    target
+                        .read()
+                        .read(&mut read_var_op, array_ptr as *const _ as usize)
+                        .apply()
+                        .expect("Failed to apply memop");
+
+                    assert_eq!([123, 456], read_var_op);
+
+                    dealloc(ptr, layout);
+
+                    ptrace::cont(child, Some(signal::Signal::SIGCONT)).unwrap();
+
+                    wait::waitpid(child, None).unwrap();
+                }
+                Err(x) => panic!(x),
+            }
         }
     }
 }
