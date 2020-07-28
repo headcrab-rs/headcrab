@@ -11,13 +11,14 @@ fn main() {
 #[cfg(target_os = "linux")]
 mod example {
     use headcrab::{
-        symbol::RelocatedDwarf,
+        symbol::{DisassemblySource, RelocatedDwarf},
         target::{AttachOptions, LinuxTarget, UnixTarget},
     };
 
     struct Context {
         remote: Option<LinuxTarget>,
         debuginfo: Option<RelocatedDwarf>,
+        disassembler: DisassemblySource,
     }
 
     impl Context {
@@ -55,6 +56,7 @@ mod example {
         let mut context = Context {
             remote: None,
             debuginfo: None,
+            disassembler: DisassemblySource::new(),
         };
 
         let mut cmds = vec![];
@@ -230,6 +232,19 @@ mod example {
                             .unwrap_or("<unknown>")
                     );
                 }
+            }
+            Some("dis") | Some("disassemble") => {
+                let ip = context.remote()?.read_regs()?.rip;
+                let mut code = [0; 64];
+                unsafe {
+                    context
+                        .remote()?
+                        .read()
+                        .read(&mut code, ip as usize)
+                        .apply()?;
+                }
+                let disassembly = context.disassembler.source_snippet(&code, ip, true)?;
+                println!("{}", disassembly);
             }
 
             // Patch the `pause` instruction inside a function called `breakpoint` to be a

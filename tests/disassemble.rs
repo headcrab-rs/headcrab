@@ -39,7 +39,8 @@ fn disassemble() -> Result<(), Box<dyn std::error::Error>> {
     }
     dbg!();
 
-    let disassembly = headcrab::symbol::DisassemblySource::new().source_snippet(&code, ip)?;
+    let disassembly =
+        headcrab::symbol::DisassemblySource::new().source_snippet(&code, ip, false)?;
     assert_eq!(
         disassembly,
         "nop \n\

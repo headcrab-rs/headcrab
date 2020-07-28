@@ -21,12 +21,16 @@ impl DisassemblySource {
         &self,
         bytes: &[u8],
         addr: u64,
+        show_address: bool,
     ) -> Result<String, Box<dyn std::error::Error>> {
         use std::fmt::Write;
 
         let mut fmt = String::new();
 
         for insn in self.0.disasm_all(&bytes, addr).unwrap().iter() {
+            if show_address {
+                write!(fmt, "0x{:016x}: ", insn.address()).unwrap();
+            }
             if let Some(mnemonic) = insn.mnemonic() {
                 write!(fmt, "{} ", mnemonic).unwrap();
                 if let Some(op_str) = insn.op_str() {
