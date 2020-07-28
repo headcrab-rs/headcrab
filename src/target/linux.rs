@@ -164,6 +164,24 @@ impl LinuxTarget {
             })
             .collect())
     }
+
+    /// Returns the current snapshot view of this debugee process threads.
+    pub fn threads(
+        &self,
+    ) -> Result<Vec<Box<dyn Thread<ThreadId = i32>>>, Box<dyn std::error::Error>> {
+        let tasks: Vec<_> = Process::new(self.pid.as_raw())?
+            .tasks()?
+            .flatten()
+            .collect();
+
+        let mut result: Vec<Box<dyn Thread<ThreadId = i32>>> = vec![];
+        for task in tasks {
+            let t_stat = task.stat()?;
+            let thread = LinuxThread::new(&t_stat.comm, task.tid);
+            result.push(Box::new(thread))
+        }
+        Ok(result)
+    }
 }
 
 /// A single memory read operation.
