@@ -344,9 +344,14 @@ mod tests {
             .map(|t| (t.name().unwrap().clone(), t.thread_id()))
             .collect();
 
-        // Find at least 3 threads (cargo runs a minimum of 2)
+        // Not always consistent: see https://github.com/rust-lang/rust/issues/74845
+        let cargo_threads = std::env::var("RUST_TEST_THREADS")
+            .map(|s| s.parse::<usize>())
+            .unwrap_or(Ok(2))?;
+
+        // Using >= because we can't trust the cargo_threads number
         assert!(
-            threads.len() >= 3,
+            threads.len() >= cargo_threads + 1,
             "Expected at least 3 threads in {:?}",
             threads
         );
