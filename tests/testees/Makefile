@@ -1,5 +1,5 @@
 CC       = rustc
-CC_FLAGS = -g -C relocation-model=dynamic-no-pic
+CC_FLAGS = -g -Copt-level=2
 SRCS = $(wildcard *.rs)
 BINS = $(patsubst %.rs,%,$(SRCS))
 
