@@ -3,7 +3,7 @@
 mod test_utils;
 
 #[cfg(target_os = "linux")]
-use headcrab::{symbol::RelocatedDwarf, target::LinuxTarget, target::UnixTarget};
+use headcrab::{symbol::RelocatedDwarf, target::UnixTarget};
 
 static BIN_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/testees/hello");
 
@@ -17,7 +17,7 @@ static MAC_DSYM_PATH: &str = concat!(
 // FIXME: Running this test just for linux because of privileges issue on macOS. Enable for everything after fixing.
 #[cfg(target_os = "linux")]
 #[test]
-fn read_memory() -> Result<(), Box<dyn std::error::Error>> {
+fn unwind_stack() -> Result<(), Box<dyn std::error::Error>> {
     test_utils::ensure_testees();
 
     let target = test_utils::launch(BIN_PATH);
@@ -30,12 +30,12 @@ fn read_memory() -> Result<(), Box<dyn std::error::Error>> {
     // Wait for the breakpoint to get hit.
     target.unpause().unwrap();
 
-    let sp = target.read_regs().unwrap().rsp;
+    let regs = target.read_regs().unwrap();
 
     // Read stack
-    let mut stack: [usize; 1024] = [0; 1024];
+    let mut stack: [usize; 256] = [0; 256];
     unsafe {
-        target.read().read(&mut stack, sp as usize).apply()?;
+        target.read().read(&mut stack, regs.rsp as usize).apply()?;
     }
 
     for func in headcrab::symbol::unwind::naive_unwinder(&debuginfo, &stack[..]) {
@@ -75,11 +75,51 @@ fn read_memory() -> Result<(), Box<dyn std::error::Error>> {
         "_start",
     ];
 
-    for (real, expected) in call_stack.into_iter().zip(expected) {
-        assert!(real.starts_with(expected), "`{}` doesn't start with `{}`", real, expected);
-    }
+    test_backtrace(call_stack, expected);
+
+    let call_stack: Vec<_> = headcrab::symbol::unwind::frame_pointer_unwinder(
+        &debuginfo,
+        &stack[..],
+        regs.rsp as usize,
+        regs.rbp as usize,
+    )
+    .map(|func| {
+        debuginfo
+            .get_address_symbol_name(func)
+            .unwrap_or_else(|| "<unknown>".to_string())
+    })
+    .collect();
+
+    println!("{:?}", call_stack);
+
+    let expected = &[
+        "_ZN5hello4main17h",
+        "_ZN3std2rt10lang_start28_$u7b$$u7b$closure$u7d$$u7d$17h",
+        "_ZN3std2rt19lang_start_internal17h",
+    ];
+
+    test_backtrace(call_stack, expected);
 
     target.unpause()?;
 
     Ok(())
+}
+
+fn test_backtrace(real: Vec<String>, expected: &[&str]) {
+    println!("\nReal: {:?}\nExpected: {:?}", real, expected);
+    let mut real = real.into_iter();
+    let mut expected = expected.iter();
+    loop {
+        match (real.next(), expected.next()) {
+            (Some(real), Some(expected)) => assert!(
+                real.starts_with(expected),
+                "`{}` doesn't start with `{}`",
+                real,
+                expected
+            ),
+            (Some(real), None) => panic!("Unexpected frame {:?}", real),
+            (None, Some(expected)) => panic!("Missing frame {:?}", expected),
+            (None, None) => break,
+        }
+    }
 }
