@@ -177,24 +177,15 @@ impl LinuxTarget {
 
         let mut result: Vec<Box<dyn Thread<ThreadId = i32>>> = vec![];
         for task in tasks {
-            // The task page might be incomplete and we should retry
-            let mut read_attempts = 0;
-            while read_attempts < 3 {
-                match task.stat() {
-                    Ok(t_stat) => {
-                        let thread = LinuxThread::new(&t_stat.comm, task.tid);
-                        result.push(Box::new(thread));
-                        break;
-                    }
-                    Err(ProcError::NotFound(_)) => {
-                        // ok to skip. One thread is gone...
-                        break;
-                    }
-                    Err(ProcError::Incomplete(_)) => {
-                        read_attempts += 1;
-                    }
-                    Err(err) => return Err(Box::new(err)),
+            match task.stat() {
+                Ok(t_stat) => {
+                    let thread = LinuxThread::new(&t_stat.comm, task.tid);
+                    result.push(Box::new(thread));
                 }
+                Err(ProcError::NotFound(_)) | Err(ProcError::Incomplete(_)) => {
+                    // ok to skip. Thread is gone or it's page is not complete yet.
+                }
+                Err(err) => return Err(Box::new(err)),
             }
         }
         Ok(result)
