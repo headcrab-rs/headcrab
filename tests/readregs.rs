@@ -2,9 +2,6 @@
 
 mod test_utils;
 
-#[cfg(target_os = "linux")]
-use headcrab::{target::LinuxTarget, target::UnixTarget};
-
 static BIN_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/testees/hello");
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
@@ -12,7 +9,7 @@ static BIN_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/testees/hell
 fn read_regs() -> Result<(), Box<dyn std::error::Error>> {
     test_utils::ensure_testees();
 
-    let target = LinuxTarget::launch(BIN_PATH)?;
+    let target = test_utils::launch(BIN_PATH);
 
     let regs = target.read_regs()?;
 
@@ -53,7 +50,7 @@ fn read_regs() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(regs.fs, 0);
     assert_eq!(regs.gs, 0);
 
-    target.unpause()?;
+    test_utils::continue_to_end(&target);
 
     Ok(())
 }

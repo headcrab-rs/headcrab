@@ -3,7 +3,7 @@
 mod test_utils;
 
 #[cfg(target_os = "linux")]
-use headcrab::{target::LinuxTarget, target::UnixTarget};
+use headcrab::target::UnixTarget;
 
 static BIN_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/testees/hello");
 
@@ -13,7 +13,7 @@ static BIN_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/testees/hell
 fn syscall() -> Result<(), Box<dyn std::error::Error>> {
     test_utils::ensure_testees();
 
-    let target = LinuxTarget::launch(BIN_PATH)?;
+    let target = test_utils::launch(BIN_PATH);
 
     println!(
         "{}\n",
@@ -34,7 +34,7 @@ fn syscall() -> Result<(), Box<dyn std::error::Error>> {
     for line in std::fs::read_to_string(format!("/proc/{}/maps", target.pid()))?.lines() {
         if line.starts_with(&format!("{:08x}-", addr)) {
             // Found mapped addr
-            target.unpause()?;
+            test_utils::continue_to_end(&target);
             return Ok(());
         }
     }

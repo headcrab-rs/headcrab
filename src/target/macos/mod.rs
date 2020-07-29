@@ -93,12 +93,6 @@ impl Target {
         })
     }
 
-    /// Continues execution of a debuggee.
-    pub fn unpause(&self) -> Result<(), Box<dyn std::error::Error>> {
-        signal::kill(self.pid, Signal::SIGCONT)?;
-        Ok(())
-    }
-
     /// Returns a list of maps in the debuggee's virtual adddress space.
     pub fn get_addr_range(&self) -> Result<usize, Box<dyn std::error::Error>> {
         let regs = vmmap::macosx_debug_regions(self.pid, self.port);

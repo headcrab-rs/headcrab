@@ -3,7 +3,7 @@
 mod test_utils;
 
 #[cfg(target_os = "linux")]
-use headcrab::{symbol::RelocatedDwarf, target::LinuxTarget, target::UnixTarget};
+use headcrab::{symbol::RelocatedDwarf, target::UnixTarget};
 
 static BIN_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/testees/hello");
 
@@ -20,7 +20,7 @@ static MAC_DSYM_PATH: &str = concat!(
 fn read_memory() -> Result<(), Box<dyn std::error::Error>> {
     test_utils::ensure_testees();
 
-    let target = LinuxTarget::launch(BIN_PATH)?;
+    let target = test_utils::launch(BIN_PATH);
 
     println!("{:#?}", target.memory_maps()?);
     let debuginfo = RelocatedDwarf::from_maps(&target.memory_maps()?)?;
@@ -105,7 +105,7 @@ fn read_memory() -> Result<(), Box<dyn std::error::Error>> {
 
     assert_eq!(&rval, b"Hello, world!");
 
-    target.unpause()?;
+    test_utils::continue_to_end(&target);
 
     Ok(())
 }
