@@ -24,7 +24,7 @@ pub trait UnixTarget {
         Ok(status)
     }
 
-    /// Detach from the debuggee, continuing it's execution.
+    /// Detach from the debuggee, continuing its execution.
     fn detach(&self) -> Result<(), Box<dyn std::error::Error>> {
         ptrace::detach(self.pid(), None)?;
         Ok(())
