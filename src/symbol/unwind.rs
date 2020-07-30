@@ -3,10 +3,11 @@
 pub fn naive_unwinder<'a>(
     debuginfo: &'a super::RelocatedDwarf,
     stack: &'a [usize],
+    rip: usize,
 ) -> impl Iterator<Item = usize> + 'a {
-    stack.iter().cloned().filter(move |addr| {
+    std::iter::once(rip).chain(stack.iter().cloned().filter(move |addr| {
         debuginfo.get_address_symbol_kind(*addr) == Some(object::SymbolKind::Text)
-    })
+    }))
 }
 
 struct FramePointerUnwinder<'a> {
@@ -31,15 +32,18 @@ impl Iterator for FramePointerUnwinder<'_> {
     }
 }
 
+/// This is a frame pointer based unwinder. It expects the frame pointer to form a linked list.
+/// May require `-Cforce-frame-pointers=yes`.
 pub fn frame_pointer_unwinder<'a>(
     _debuginfo: &'a super::RelocatedDwarf,
     stack: &'a [usize],
+    rip: usize,
     stack_offset: usize,
     rbp: usize,
 ) -> impl Iterator<Item = usize> + 'a {
-    FramePointerUnwinder {
+    std::iter::once(rip).chain(FramePointerUnwinder {
         stack,
         stack_offset,
         rbp,
-    }
+    })
 }

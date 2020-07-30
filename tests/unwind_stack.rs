@@ -38,18 +38,7 @@ fn unwind_stack() -> Result<(), Box<dyn std::error::Error>> {
         target.read().read(&mut stack, regs.rsp as usize).apply()?;
     }
 
-    for func in headcrab::symbol::unwind::naive_unwinder(&debuginfo, &stack[..]) {
-        println!(
-            "{:016x} {}",
-            func,
-            debuginfo
-                .get_address_symbol_name(func)
-                .as_deref()
-                .unwrap_or("<unknown>")
-        );
-    }
-
-    let call_stack: Vec<_> = headcrab::symbol::unwind::naive_unwinder(&debuginfo, &stack[..])
+    let call_stack: Vec<_> = headcrab::symbol::unwind::naive_unwinder(&debuginfo, &stack[..], regs.rip as usize)
         .map(|func| {
             debuginfo
                 .get_address_symbol_name(func)
@@ -58,6 +47,7 @@ fn unwind_stack() -> Result<(), Box<dyn std::error::Error>> {
         .collect();
 
     let expected = &[
+        "breakpoint",
         "_ZN5hello4main17h",
         "_ZN3std2rt10lang_start28_$u7b$$u7b$closure$u7d$$u7d$17h",
         "_ZN3std2rt19lang_start_internal17h",
@@ -80,6 +70,7 @@ fn unwind_stack() -> Result<(), Box<dyn std::error::Error>> {
     let call_stack: Vec<_> = headcrab::symbol::unwind::frame_pointer_unwinder(
         &debuginfo,
         &stack[..],
+        regs.rip as usize,
         regs.rsp as usize,
         regs.rbp as usize,
     )
@@ -93,6 +84,7 @@ fn unwind_stack() -> Result<(), Box<dyn std::error::Error>> {
     println!("{:?}", call_stack);
 
     let expected = &[
+        "breakpoint",
         "_ZN5hello4main17h",
         "_ZN3std2rt10lang_start28_$u7b$$u7b$closure$u7d$$u7d$17h",
         "_ZN3std2rt19lang_start_internal17h",

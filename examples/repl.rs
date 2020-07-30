@@ -190,7 +190,7 @@ mod example {
             Some("bt") | Some("backtrace") => {
                 context.load_debuginfo_if_necessary()?;
 
-                let sp = context.remote()?.read_regs().unwrap().rsp;
+                let regs = context.remote()?.read_regs()?;
 
                 // Read stack
                 let mut stack: [usize; 1024] = [0; 1024];
@@ -198,13 +198,15 @@ mod example {
                     context
                         .remote()?
                         .read()
-                        .read(&mut stack, sp as usize)
+                        .read(&mut stack, regs.rsp as usize)
                         .apply()?;
                 }
 
-                for func in
-                    headcrab::symbol::unwind::naive_unwinder(context.debuginfo(), &stack[..])
-                {
+                for func in headcrab::symbol::unwind::naive_unwinder(
+                    context.debuginfo(),
+                    &stack[..],
+                    regs.rip as usize,
+                ) {
                     println!(
                         "{:016x} {}",
                         func,
