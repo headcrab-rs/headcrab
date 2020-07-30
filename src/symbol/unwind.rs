@@ -20,11 +20,11 @@ impl Iterator for FramePointerUnwinder<'_> {
     type Item = usize;
 
     fn next(&mut self) -> Option<Self::Item> {
-        println!("stack_offset={:x} rbp={:x}", self.stack_offset, self.rbp);
-        if self.rbp >= self.stack_offset && self.rbp < self.stack_offset + self.stack.len() * 8 {
-            let ip = self.stack[(self.rbp - self.stack_offset) / 8 + 1];
-            println!("ip={:x}", ip);
-            self.rbp = self.stack[(self.rbp - self.stack_offset) / 8];
+        if self.rbp >= self.stack_offset
+            && self.rbp < self.stack_offset + self.stack.len() * std::mem::size_of::<usize>()
+        {
+            let ip = self.stack[(self.rbp - self.stack_offset) / std::mem::size_of::<usize>() + 1];
+            self.rbp = self.stack[(self.rbp - self.stack_offset) / std::mem::size_of::<usize>()];
             Some(ip)
         } else {
             None
