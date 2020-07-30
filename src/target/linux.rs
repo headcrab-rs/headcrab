@@ -1,7 +1,5 @@
 use nix::unistd::{getpid, Pid};
-use procfs::process::Process;
 use std::{
-    cmp::min,
     fs::File,
     io::{BufRead, BufReader},
     marker::PhantomData,
@@ -47,7 +45,7 @@ impl LinuxTarget {
 
     /// Reads memory from a debuggee process.
     pub fn read(&self) -> ReadMemory {
-        ReadMemory::new(self.pid())
+        ReadMemory::new(&self)
     }
 
     /// Reads the register values from the main thread of a debuggee process.
@@ -140,6 +138,10 @@ impl LinuxTarget {
                     procfs::process::MMapPath::Path(path) => Some((path, map.offset)),
                     _ => None,
                 },
+                is_readable: map.perms.chars().nth(0) == Some('r'),
+                is_writeable: map.perms.chars().nth(1) == Some('w'),
+                is_executable: map.perms.chars().nth(2) == Some('x'),
+                is_private: map.perms.chars().nth(3) == Some('p'),
             })
             .collect())
     }
@@ -217,17 +219,16 @@ impl ReadOp {
 }
 
 /// Allows to read memory from different locations in debuggee's memory as a single operation.
-/// On Linux, this will correspond to a single system call / context switch.
 pub struct ReadMemory<'a> {
-    pid: Pid,
+    target: &'a LinuxTarget,
     read_ops: Vec<ReadOp>,
     _marker: PhantomData<&'a mut ()>,
 }
 
 impl<'a> ReadMemory<'a> {
-    fn new(pid: Pid) -> Self {
+    fn new(target: &'a LinuxTarget) -> Self {
         ReadMemory {
-            pid,
+            target,
             read_ops: Vec::new(),
             _marker: PhantomData,
         }
@@ -305,7 +306,7 @@ impl<'a> ReadMemory<'a> {
         let bytes_read = unsafe {
             // todo: document unsafety
             libc::process_vm_readv(
-                self.pid.into(),
+                self.target.pid.into(),
                 local_iov.as_ptr(),
                 local_iov.len() as libc::c_ulong,
                 remote_iov.as_ptr(),
@@ -326,7 +327,7 @@ impl<'a> ReadMemory<'a> {
     fn read_ptrace(&self, read_ops: &[&ReadOp]) -> Result<(), Box<dyn std::error::Error>> {
         for read_op in read_ops {
             unix::read(
-                self.pid,
+                self.target.pid,
                 read_op.remote_base,
                 read_op.len,
                 read_op.local_ptr,
@@ -340,11 +341,11 @@ impl<'a> ReadMemory<'a> {
         &self,
         read_ops: &'a [ReadOp],
     ) -> Result<(Vec<&'a ReadOp>, Vec<&'a ReadOp>), Box<dyn std::error::Error>> {
-        let maps = Process::new(self.pid.as_raw())?.maps()?;
+        let maps = self.target.memory_maps()?;
 
         let protected_maps = maps
             .iter()
-            .filter(|map| map.perms.chars().nth(0) != Some('r'))
+            .filter(|map| !map.is_readable)
             .collect::<Vec<_>>();
 
         let (protected, readable): (_, Vec<_>) = read_ops.into_iter().partition(|read_op| {
@@ -394,7 +395,8 @@ mod tests {
         let mut read_var2_op: u8 = 0;
 
         unsafe {
-            ReadMemory::new(getpid())
+            let target = LinuxTarget { pid: getpid() };
+            ReadMemory::new(&target)
                 .read(&mut read_var_op, &var as *const _ as usize)
                 .read(&mut read_var2_op, &var2 as *const _ as usize)
                 .apply()
@@ -442,7 +444,8 @@ mod tests {
                     use std::{thread, time};
                     thread::sleep(time::Duration::from_millis(100));
 
-                    let target = LinuxTarget::attach(child).expect("Couldn't attach to child");
+                    let (target, _wait_status) =
+                        LinuxTarget::attach(child).expect("Couldn't attach to child");
 
                     target
                         .read()
@@ -498,7 +501,8 @@ mod tests {
                     use std::{thread, time};
                     thread::sleep(time::Duration::from_millis(100));
 
-                    let target = LinuxTarget::attach(child).expect("Couldn't attach to child");
+                    let (target, _wait_status) =
+                        LinuxTarget::attach(child).expect("Couldn't attach to child");
 
                     target
                         .read()
