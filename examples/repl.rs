@@ -10,7 +10,7 @@ fn main() {
 
 #[cfg(target_os = "linux")]
 mod example {
-    use headcrab::target::{LinuxTarget, UnixTarget};
+    use headcrab::target::{AttachOptions, LinuxTarget, UnixTarget};
 
     struct Context {
         remote: Option<LinuxTarget>,
@@ -138,7 +138,8 @@ mod example {
                 if let Some(pid) = parts.next() {
                     let pid = nix::unistd::Pid::from_raw(pid.parse()?);
                     println!("Attaching to process {}", pid);
-                    let (remote, status) = LinuxTarget::attach(pid)?;
+                    let (remote, status) =
+                        LinuxTarget::attach(pid, AttachOptions { kill_on_exit: true })?;
                     println!("{:?}", status);
                     // FIXME detach or kill old remote
                     context.remote = Some(remote);

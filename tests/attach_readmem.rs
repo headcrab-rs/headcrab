@@ -6,7 +6,7 @@ use std::ffi::CString;
 mod test_utils;
 
 #[cfg(target_os = "linux")]
-use headcrab::{symbol::Dwarf, target::LinuxTarget};
+use headcrab::{symbol::Dwarf, target::AttachOptions, target::LinuxTarget};
 
 static BIN_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/testees/longer_hello");
 
@@ -29,7 +29,8 @@ fn attach_readmem() -> Result<(), Box<dyn std::error::Error>> {
             use std::{thread, time};
             thread::sleep(time::Duration::from_millis(50));
 
-            let (target, status) = LinuxTarget::attach(child)?;
+            let (target, status) =
+                LinuxTarget::attach(child, AttachOptions { kill_on_exit: true })?;
             match status {
                 nix::sys::wait::WaitStatus::Stopped(_, nix::sys::signal::SIGTRAP) => {}
                 _ => panic!("Status: {:?}", status),
