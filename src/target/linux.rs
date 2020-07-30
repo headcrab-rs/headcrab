@@ -332,18 +332,30 @@ impl<'a> ReadMemory<'a> {
         &self,
         read_ops: &'a [ReadOp],
     ) -> Result<(Vec<&'a ReadOp>, Vec<&'a ReadOp>), Box<dyn std::error::Error>> {
+        use std::cmp::Ordering;
+
         let maps = self.target.memory_maps()?;
 
-        let protected_maps = maps
+        let mut protected_maps = maps
             .iter()
             .filter(|map| !map.is_readable)
             .collect::<Vec<_>>();
 
+        // Not sure if required
+        protected_maps.sort_by(|a, b| a.address.0.cmp(&b.address.0));
+
         let (protected, readable): (_, Vec<_>) = read_ops.iter().partition(|read_op| {
-            protected_maps.iter().any(|map| {
-                map.address.0 as usize <= read_op.remote_base
-                    && read_op.remote_base < map.address.1 as usize
-            })
+            protected_maps
+                .binary_search_by(|map| {
+                    if read_op.remote_base < map.address.0 as usize {
+                        Ordering::Greater
+                    } else if read_op.remote_base > map.address.1 as usize {
+                        Ordering::Less
+                    } else {
+                        Ordering::Equal
+                    }
+                })
+                .is_ok()
         });
 
         Ok((protected, readable))
