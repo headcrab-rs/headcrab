@@ -48,6 +48,7 @@ pub(in crate::target) fn launch(
     match fork()? {
         ForkResult::Parent { child, .. } => {
             let status = waitpid(child, None)?;
+
             Ok((child, status))
         }
         ForkResult::Child => {
