@@ -437,7 +437,7 @@ pub fn get_addr_range(pid: Pid) -> Result<usize, Box<dyn std::error::Error>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{LinuxTarget, ReadMemory};
+    use super::{AttachOptions, LinuxTarget, ReadMemory};
     use nix::unistd::{fork, getpid, ForkResult};
 
     use std::alloc::{alloc_zeroed, dealloc, Layout};
@@ -506,7 +506,8 @@ mod tests {
                     thread::sleep(time::Duration::from_millis(100));
 
                     let (target, _wait_status) =
-                        LinuxTarget::attach(child).expect("Couldn't attach to child");
+                        LinuxTarget::attach(child, AttachOptions { kill_on_exit: true })
+                            .expect("Couldn't attach to child");
 
                     target
                         .read()
@@ -563,7 +564,8 @@ mod tests {
                     thread::sleep(time::Duration::from_millis(100));
 
                     let (target, _wait_status) =
-                        LinuxTarget::attach(child).expect("Couldn't attach to child");
+                        LinuxTarget::attach(child, AttachOptions { kill_on_exit: true })
+                            .expect("Couldn't attach to child");
 
                     target
                         .read()
