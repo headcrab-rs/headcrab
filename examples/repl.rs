@@ -202,11 +202,24 @@ mod example {
                         .apply()?;
                 }
 
-                for func in headcrab::symbol::unwind::naive_unwinder(
-                    context.debuginfo(),
-                    &stack[..],
-                    regs.rip as usize,
-                ) {
+                let call_stack: Vec<_> = match parts.next() {
+                    Some("fp") | None => headcrab::symbol::unwind::frame_pointer_unwinder(
+                        context.debuginfo(),
+                        &stack[..],
+                        regs.rip as usize,
+                        regs.rsp as usize,
+                        regs.rbp as usize,
+                    )
+                    .collect(),
+                    Some("naive") => headcrab::symbol::unwind::naive_unwinder(
+                        context.debuginfo(),
+                        &stack[..],
+                        regs.rip as usize,
+                    )
+                    .collect(),
+                    Some(sub) => Err(format!("Unknown `bt` subcommand `{}`", sub))?,
+                };
+                for func in call_stack {
                     println!(
                         "{:016x} {}",
                         func,
