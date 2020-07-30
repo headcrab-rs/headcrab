@@ -19,4 +19,13 @@ pub struct MemoryMap {
     pub address: (u64, u64),
     /// The file and file offset backing the mapped memory if any.
     pub backing_file: Option<(std::path::PathBuf, u64)>,
+
+    /// Is mapped memory readable.
+    pub is_readable: bool,
+    /// Is mapped memory writeable.
+    pub is_writeable: bool,
+    /// Is mapped memory executable.
+    pub is_executable: bool,
+    /// Is mapped memory private.
+    pub is_private: bool,
 }

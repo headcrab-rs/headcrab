@@ -1,3 +1,4 @@
+use nix::sys::ptrace;
 use nix::unistd::{getpid, Pid};
 use std::{
     fs::File,
@@ -7,6 +8,10 @@ use std::{
 };
 
 use crate::target::unix::{self, UnixTarget};
+
+lazy_static! {
+    static ref PAGE_SIZE: usize = unsafe { libc::sysconf(libc::_SC_PAGESIZE) as usize };
+}
 
 /// This structure holds the state of a debuggee on Linux based systems
 /// You can use it to read & write debuggee's memory, pause it, set breakpoints, etc.
@@ -47,7 +52,7 @@ impl LinuxTarget {
 
     /// Reads memory from a debuggee process.
     pub fn read(&self) -> ReadMemory {
-        ReadMemory::new(self.pid())
+        ReadMemory::new(&self)
     }
 
     /// Reads the register values from the main thread of a debuggee process.
@@ -134,12 +139,19 @@ impl LinuxTarget {
         Ok(procfs::process::Process::new(self.pid.as_raw())?
             .maps()?
             .into_iter()
-            .map(|map| super::MemoryMap {
-                address: map.address,
-                backing_file: match map.pathname {
-                    procfs::process::MMapPath::Path(path) => Some((path, map.offset)),
-                    _ => None,
-                },
+            .map(|map| {
+                let mut perms = map.perms.chars();
+                super::MemoryMap {
+                    address: map.address,
+                    backing_file: match map.pathname {
+                        procfs::process::MMapPath::Path(path) => Some((path, map.offset)),
+                        _ => None,
+                    },
+                    is_readable: perms.next() == Some('r'),
+                    is_writeable: perms.next() == Some('w'),
+                    is_executable: perms.next() == Some('x'),
+                    is_private: perms.next() == Some('p'),
+                }
             })
             .collect())
     }
@@ -177,20 +189,58 @@ impl ReadOp {
             iov_len: self.len,
         }
     }
+
+    /// Splits ReadOp so that each resulting ReadOp resides in only one memory page.
+    fn split_on_page_boundary(&self) -> Vec<ReadOp> {
+        let mut out = Vec::new();
+
+        // Number of bytes left to be read
+        let mut left = self.len;
+
+        let next_page_distance = *PAGE_SIZE - ((*PAGE_SIZE - 1) & self.remote_base);
+        let to_next_read_op = std::cmp::min(left, next_page_distance);
+        // Read from remote_base to the end or to the next page
+        out.push(ReadOp {
+            remote_base: self.remote_base,
+            len: to_next_read_op,
+            local_ptr: self.local_ptr,
+        });
+        left -= to_next_read_op;
+
+        while left > 0 {
+            if left < *PAGE_SIZE {
+                // Read from beginning of the page to a part in the middle (last read)
+                out.push(ReadOp {
+                    remote_base: self.remote_base + (self.len - left),
+                    len: left,
+                    local_ptr: (self.local_ptr as usize + (self.len - left)) as *mut libc::c_void,
+                });
+                break;
+            } else {
+                // Whole page is being read
+                out.push(ReadOp {
+                    remote_base: self.remote_base + (self.len - left),
+                    len: *PAGE_SIZE,
+                    local_ptr: (self.local_ptr as usize + (self.len - left)) as *mut libc::c_void,
+                });
+                left -= *PAGE_SIZE;
+            }
+        }
+        out
+    }
 }
 
 /// Allows to read memory from different locations in debuggee's memory as a single operation.
-/// On Linux, this will correspond to a single system call / context switch.
 pub struct ReadMemory<'a> {
-    pid: Pid,
+    target: &'a LinuxTarget,
     read_ops: Vec<ReadOp>,
     _marker: PhantomData<&'a mut ()>,
 }
 
 impl<'a> ReadMemory<'a> {
-    fn new(pid: Pid) -> Self {
+    fn new(target: &'a LinuxTarget) -> Self {
         ReadMemory {
-            pid,
+            target,
             read_ops: Vec::new(),
             _marker: PhantomData,
         }
@@ -209,34 +259,66 @@ impl<'a> ReadMemory<'a> {
     /// In case of doubt, wrap the type in [`mem::MaybeUninit`].
     // todo: further document mem safety - e.g., what happens in the case of partial read
     pub unsafe fn read<T>(mut self, val: &'a mut T, remote_base: usize) -> Self {
-        self.read_ops.push(ReadOp {
-            remote_base,
-            len: mem::size_of::<T>(),
-            local_ptr: val as *mut T as *mut libc::c_void,
-        });
+        self.read_ops.append(
+            &mut ReadOp {
+                remote_base,
+                len: mem::size_of::<T>(),
+                local_ptr: val as *mut T as *mut libc::c_void,
+            }
+            .split_on_page_boundary(),
+        );
 
         self
     }
 
     /// Executes the memory read operation.
     pub fn apply(self) -> Result<(), Box<dyn std::error::Error>> {
-        // Create a list of `IoVec`s and remote `IoVec`s
-        let remote_iov = self
+        let read_len = self
             .read_ops
             .iter()
-            .map(ReadOp::as_remote_iovec)
+            .fold(0, |sum, read_op| sum + read_op.len);
+
+        if read_len > isize::MAX as usize {
+            panic!("Read size too big");
+        };
+
+        // FIXME: Probably a better way to do this
+        let result = self.read_process_vm(
+            &self
+                .read_ops
+                .iter()
+                .map(|read_op| read_op)
+                .collect::<Vec<_>>(),
+        );
+
+        if result.is_err() && result.unwrap_err() == nix::Error::Sys(nix::errno::Errno::EFAULT)
+            || result.is_ok() && result.unwrap() != read_len as isize
+        {
+            let (protected, readable) = self.split_protected(&self.read_ops)?;
+
+            self.read_process_vm(&readable)?;
+            self.read_ptrace(&protected)?;
+        }
+        Ok(())
+    }
+
+    /// Allows to read from several different locations with one system call.
+    /// It will ignore pages that are not readable. Returns number of bytes read at granularity of ReadOps.
+    fn read_process_vm(&self, read_ops: &[&ReadOp]) -> Result<isize, nix::Error> {
+        let remote_iov = read_ops
+            .iter()
+            .map(|read_op| read_op.as_remote_iovec())
             .collect::<Vec<_>>();
 
-        let local_iov = self
-            .read_ops
+        let local_iov = read_ops
             .iter()
-            .map(ReadOp::as_local_iovec)
+            .map(|read_op| read_op.as_local_iovec())
             .collect::<Vec<_>>();
 
         let bytes_read = unsafe {
             // todo: document unsafety
             libc::process_vm_readv(
-                self.pid.into(),
+                self.target.pid.into(),
                 local_iov.as_ptr(),
                 local_iov.len() as libc::c_ulong,
                 remote_iov.as_ptr(),
@@ -246,12 +328,81 @@ impl<'a> ReadMemory<'a> {
         };
 
         if bytes_read == -1 {
-            // fixme: return a proper error type
-            return Err(Box::new(nix::Error::last()));
+            return Err(nix::Error::last());
         }
 
-        // fixme: check that it's an expected number of read bytes and account for partial reads
+        Ok(bytes_read)
+    }
 
+    /// Splits readOps to those that read from read protected memory and those that do not.
+    fn split_protected(
+        &self,
+        read_ops: &'a [ReadOp],
+    ) -> Result<(Vec<&'a ReadOp>, Vec<&'a ReadOp>), Box<dyn std::error::Error>> {
+        use std::cmp::Ordering;
+
+        let maps = self.target.memory_maps()?;
+
+        let protected_maps = maps
+            .iter()
+            .filter(|map| !map.is_readable)
+            .collect::<Vec<_>>();
+
+        let (protected, readable): (_, Vec<_>) = read_ops.iter().partition(|read_op| {
+            protected_maps
+                .binary_search_by(|map| {
+                    if read_op.remote_base < map.address.0 as usize {
+                        Ordering::Greater
+                    } else if read_op.remote_base > map.address.1 as usize {
+                        Ordering::Less
+                    } else {
+                        Ordering::Equal
+                    }
+                })
+                .is_ok()
+        });
+
+        Ok((protected, readable))
+    }
+
+    /// Allows to read from protected memory pages.
+    /// This operation results in multiple system calls and is inefficient.
+    fn read_ptrace(&self, read_ops: &[&ReadOp]) -> Result<(), Box<dyn std::error::Error>> {
+        let long_size = std::mem::size_of::<std::os::raw::c_long>();
+
+        for read_op in read_ops {
+            let mut offset: usize = 0;
+            // Read until all of the data is read
+            while offset < read_op.len {
+                let data = ptrace::read(
+                    self.target.pid,
+                    (read_op.remote_base + offset) as *mut std::ffi::c_void,
+                )?;
+
+                // Read full word. No need to preserve other data
+                if (read_op.len - offset) >= long_size {
+                    // todo: document unsafety
+                    unsafe {
+                        *((read_op.local_ptr as usize + offset) as *mut i64) = data;
+                    }
+
+                // Read part smaller than word. Need to preserve other data
+                } else {
+                    // todo: document unsafety
+                    unsafe {
+                        let previous_bytes: &mut [u8] = std::slice::from_raw_parts_mut(
+                            (read_op.local_ptr as usize + offset) as *mut u8,
+                            read_op.len - offset,
+                        );
+                        let data_bytes = data.to_ne_bytes();
+
+                        previous_bytes[0..(read_op.len - offset)]
+                            .clone_from_slice(&data_bytes[0..(read_op.len - offset)]);
+                    }
+                }
+                offset += long_size;
+            }
+        }
         Ok(())
     }
 }
@@ -273,12 +424,15 @@ pub fn get_addr_range(pid: Pid) -> Result<usize, Box<dyn std::error::Error>> {
 
 #[cfg(test)]
 mod tests {
-    use super::ReadMemory;
-    use nix::unistd::getpid;
+    use super::{LinuxTarget, ReadMemory};
+    use nix::unistd::{fork, getpid, ForkResult};
 
     use std::alloc::{alloc_zeroed, dealloc, Layout};
 
-    use nix::sys::mman::{mprotect, ProtFlags};
+    use nix::sys::{
+        mman::{mprotect, ProtFlags},
+        ptrace, signal, wait,
+    };
 
     #[test]
     fn read_memory() {
@@ -289,7 +443,8 @@ mod tests {
         let mut read_var2_op: u8 = 0;
 
         unsafe {
-            ReadMemory::new(getpid())
+            let target = LinuxTarget { pid: getpid() };
+            ReadMemory::new(&target)
                 .read(&mut read_var_op, &var as *const _ as usize)
                 .read(&mut read_var2_op, &var2 as *const _ as usize)
                 .apply()
@@ -304,69 +459,117 @@ mod tests {
 
     #[test]
     fn read_protected_memory() {
-        let mut read_var_op: usize = 0;
+        let mut read_var1_op: u8 = 0;
+        let mut read_var2_op: usize = 0;
+
+        let var1: u8 = 1;
+        let var2: usize = 2;
+
+        let layout = Layout::from_size_align(2 * PAGE_SIZE, PAGE_SIZE).unwrap();
 
         unsafe {
-            let layout = Layout::from_size_align(PAGE_SIZE, PAGE_SIZE).unwrap();
             let ptr = alloc_zeroed(layout);
 
-            *(ptr as *mut usize) = 9921;
+            match fork() {
+                Ok(ForkResult::Child) => {
+                    *(ptr as *mut u8) = var1;
 
-            mprotect(
-                ptr as *mut std::ffi::c_void,
-                PAGE_SIZE,
-                ProtFlags::PROT_NONE,
-            )
-            .expect("Failed to mprotect");
+                    mprotect(
+                        ptr as *mut std::ffi::c_void,
+                        PAGE_SIZE,
+                        ProtFlags::PROT_WRITE,
+                    )
+                    .expect("Failed to mprotect");
 
-            let res = ReadMemory::new(getpid())
-                .read(&mut read_var_op, ptr as *const _ as usize)
-                .apply();
+                    // Parent reads memory
 
-            // Expected to fail when reading read-protected memory.
-            // FIXME: Change when reading read-protected memory is handled properly
-            match res {
-                Ok(()) => panic!("Unexpected result: reading protected memory succeeded"),
-                Err(_) => (),
+                    use std::{thread, time};
+                    thread::sleep(time::Duration::from_millis(300));
+
+                    dealloc(ptr, layout);
+                }
+                Ok(ForkResult::Parent { child, .. }) => {
+                    use std::{thread, time};
+                    thread::sleep(time::Duration::from_millis(100));
+
+                    let (target, _wait_status) =
+                        LinuxTarget::attach(child).expect("Couldn't attach to child");
+
+                    target
+                        .read()
+                        .read(&mut read_var1_op, ptr as *const _ as usize)
+                        .read(&mut read_var2_op, &var2 as *const _ as usize)
+                        .apply()
+                        .expect("ReadMemory failed");
+
+                    assert_eq!(std::ptr::read_volatile(&read_var1_op), var1);
+                    assert_eq!(std::ptr::read_volatile(&read_var2_op), var2);
+
+                    dealloc(ptr, layout);
+
+                    ptrace::cont(child, Some(signal::Signal::SIGCONT)).unwrap();
+
+                    wait::waitpid(child, None).unwrap();
+                }
+                Err(x) => panic!(x),
             }
-
-            mprotect(
-                ptr as *mut std::ffi::c_void,
-                PAGE_SIZE,
-                ProtFlags::PROT_WRITE,
-            )
-            .expect("Failed to mprotect");
-            dealloc(ptr, layout);
         }
     }
 
     #[test]
     fn read_cross_page_memory() {
-        let mut read_var_op = [0u32; 2];
+        let mut read_var_op = [0u32; PAGE_SIZE + 2];
+
+        let mut var = [123; PAGE_SIZE + 2];
+        var[0] = 321;
+        var[PAGE_SIZE + 1] = 234;
 
         unsafe {
-            let layout = Layout::from_size_align(PAGE_SIZE * 2, PAGE_SIZE).unwrap();
+            let layout = Layout::from_size_align(PAGE_SIZE * 3, PAGE_SIZE).unwrap();
             let ptr = alloc_zeroed(layout);
 
             let array_ptr = (ptr as usize + PAGE_SIZE - std::mem::size_of::<u32>()) as *mut u8;
-            *(array_ptr as *mut [u32; 2]) = [123, 456];
 
             let second_page_ptr = (ptr as usize + PAGE_SIZE) as *mut std::ffi::c_void;
 
-            mprotect(second_page_ptr, PAGE_SIZE, ProtFlags::PROT_NONE).expect("Failed to mprotect");
+            match fork() {
+                Ok(ForkResult::Child) => {
+                    *(array_ptr as *mut [u32; PAGE_SIZE + 2]) = var;
+                    mprotect(second_page_ptr, PAGE_SIZE, ProtFlags::PROT_WRITE)
+                        .expect("Failed to mprotect");
 
-            ReadMemory::new(getpid())
-                .read(&mut read_var_op, array_ptr as *const _ as usize)
-                .apply()
-                .expect("Failed to apply memop");
+                    // Parent reads memory
 
-            // Expected result because of cross page read
-            // FIXME: Change when cross page read is handled correctly
-            assert_eq!([123, 0], read_var_op);
+                    use std::{thread, time};
+                    thread::sleep(time::Duration::from_millis(300));
 
-            mprotect(second_page_ptr, PAGE_SIZE, ProtFlags::PROT_WRITE)
-                .expect("Failed to mprotect");
-            dealloc(ptr, layout);
+                    dealloc(ptr, layout);
+                }
+                Ok(ForkResult::Parent { child, .. }) => {
+                    use std::{thread, time};
+                    thread::sleep(time::Duration::from_millis(100));
+
+                    let (target, _wait_status) =
+                        LinuxTarget::attach(child).expect("Couldn't attach to child");
+
+                    target
+                        .read()
+                        .read(&mut read_var_op, array_ptr as *const _ as usize)
+                        .apply()
+                        .expect("Failed to apply memop");
+
+                    for i in 0..PAGE_SIZE + 2 {
+                        assert_eq!(var[i], read_var_op[i]);
+                    }
+
+                    dealloc(ptr, layout);
+
+                    ptrace::cont(child, Some(signal::Signal::SIGCONT)).unwrap();
+
+                    wait::waitpid(child, None).unwrap();
+                }
+                Err(x) => panic!(x),
+            }
         }
     }
 }
