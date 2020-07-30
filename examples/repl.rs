@@ -178,7 +178,7 @@ mod example {
                 context.remote = None;
             }
             Some("kill") => println!("{:?}", context.remote()?.kill()?),
-            Some("stepi") => println!("{:?}", context.remote()?.step()?),
+            Some("si") | Some("stepi") => println!("{:?}", context.remote()?.step()?),
             Some("cont") | Some("continue") => println!("{:?}", context.remote()?.unpause()?),
             Some("regs") => match parts.next() {
                 Some("read") => println!("{:?}", context.remote()?.read_regs()?),
