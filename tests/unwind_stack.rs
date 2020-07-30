@@ -45,6 +45,7 @@ fn unwind_stack() -> Result<(), Box<dyn std::error::Error>> {
                     .get_address_symbol_name(func)
                     .unwrap_or_else(|| "<unknown>".to_string())
             })
+            .take(4) // There are several frames after this that are different depending on the host
             .collect();
 
     let expected = &[
@@ -52,18 +53,6 @@ fn unwind_stack() -> Result<(), Box<dyn std::error::Error>> {
         "_ZN5hello4main17h",
         "_ZN3std2rt10lang_start28_$u7b$$u7b$closure$u7d$$u7d$17h",
         "_ZN3std2rt19lang_start_internal17h",
-        "_dl_rtld_di_serinfo",
-        "_start",
-        "_start",
-        "main",
-        "_ZN5hello4main17h",
-        "__libc_csu_init",
-        "main",
-        "_start",
-        "_dl_rtld_di_serinfo",
-        "_start",
-        "_start",
-        "_start",
     ];
 
     test_backtrace(call_stack, expected);
