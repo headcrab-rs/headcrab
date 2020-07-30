@@ -143,6 +143,12 @@ impl LinuxTarget {
             })
             .collect())
     }
+
+    /// Kill debuggee when debugger exits.
+    fn kill_on_exit(&self) -> Result<(), Box<dyn std::error::Error>> {
+        nix::sys::ptrace::setoptions(self.pid, nix::sys::ptrace::Options::PTRACE_O_EXITKILL)?;
+        Ok(())
+    }
 }
 
 /// A single memory read operation.
