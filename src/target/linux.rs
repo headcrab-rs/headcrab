@@ -1,3 +1,4 @@
+use nix::sys::ptrace;
 use nix::unistd::{getpid, Pid};
 use std::{
     fs::File,
@@ -132,16 +133,19 @@ impl LinuxTarget {
         Ok(procfs::process::Process::new(self.pid.as_raw())?
             .maps()?
             .into_iter()
-            .map(|map| super::MemoryMap {
-                address: map.address,
-                backing_file: match map.pathname {
-                    procfs::process::MMapPath::Path(path) => Some((path, map.offset)),
-                    _ => None,
-                },
-                is_readable: map.perms.chars().nth(0) == Some('r'),
-                is_writeable: map.perms.chars().nth(1) == Some('w'),
-                is_executable: map.perms.chars().nth(2) == Some('x'),
-                is_private: map.perms.chars().nth(3) == Some('p'),
+            .map(|map| {
+                let mut perms = map.perms.chars();
+                super::MemoryMap {
+                    address: map.address,
+                    backing_file: match map.pathname {
+                        procfs::process::MMapPath::Path(path) => Some((path, map.offset)),
+                        _ => None,
+                    },
+                    is_readable: perms.next() == Some('r'),
+                    is_writeable: perms.next() == Some('w'),
+                    is_executable: perms.next() == Some('x'),
+                    is_private: perms.next() == Some('p'),
+                }
             })
             .collect())
     }
@@ -183,21 +187,22 @@ impl ReadOp {
 
         let mut out = Vec::new();
 
+        // Number of bytes left to be read
         let mut left = self.len;
 
-        let to_next_readop = std::cmp::min(left, page_size - ((page_size - 1) & self.remote_base));
+        let next_page_distance = page_size - ((page_size - 1) & self.remote_base);
+        let to_next_read_op = std::cmp::min(left, next_page_distance);
+        // Read from remote_base to the end or to the next page
         out.push(ReadOp {
             remote_base: self.remote_base,
-            len: to_next_readop,
+            len: to_next_read_op,
             local_ptr: self.local_ptr,
         });
-        left -= to_next_readop;
+        left -= to_next_read_op;
 
-        loop {
-            if left == 0 {
-                break;
-            }
+        while left > 0 {
             if left < page_size {
+                // Read from beginning of the page to a part in the middle (last read)
                 out.push(ReadOp {
                     remote_base: self.remote_base + (self.len - left),
                     len: left,
@@ -205,6 +210,7 @@ impl ReadOp {
                 });
                 break;
             } else {
+                // Whole page is being read
                 out.push(ReadOp {
                     remote_base: self.remote_base + (self.len - left),
                     len: page_size,
@@ -213,7 +219,6 @@ impl ReadOp {
                 left -= page_size;
             }
         }
-
         out
     }
 }
@@ -322,20 +327,6 @@ impl<'a> ReadMemory<'a> {
         Ok(bytes_read)
     }
 
-    /// Allows to read from protected memory pages.
-    /// This operation results in multiple system calls and is inefficient.
-    fn read_ptrace(&self, read_ops: &[&ReadOp]) -> Result<(), Box<dyn std::error::Error>> {
-        for read_op in read_ops {
-            unix::read(
-                self.target.pid,
-                read_op.remote_base,
-                read_op.len,
-                read_op.local_ptr,
-            )?;
-        }
-        Ok(())
-    }
-
     /// Splits readOps to those that read from read protected memory and those that do not.
     fn split_protected(
         &self,
@@ -348,7 +339,7 @@ impl<'a> ReadMemory<'a> {
             .filter(|map| !map.is_readable)
             .collect::<Vec<_>>();
 
-        let (protected, readable): (_, Vec<_>) = read_ops.into_iter().partition(|read_op| {
+        let (protected, readable): (_, Vec<_>) = read_ops.iter().partition(|read_op| {
             protected_maps.iter().any(|map| {
                 map.address.0 as usize <= read_op.remote_base
                     && read_op.remote_base < map.address.1 as usize
@@ -356,6 +347,47 @@ impl<'a> ReadMemory<'a> {
         });
 
         Ok((protected, readable))
+    }
+
+    /// Allows to read from protected memory pages.
+    /// This operation results in multiple system calls and is inefficient.
+    fn read_ptrace(&self, read_ops: &[&ReadOp]) -> Result<(), Box<dyn std::error::Error>> {
+        let long_size = std::mem::size_of::<std::os::raw::c_long>();
+
+        for read_op in read_ops {
+            let mut offset: usize = 0;
+            // Read until all of the data is read
+            while offset < read_op.len {
+                let data = ptrace::read(
+                    self.target.pid,
+                    (read_op.remote_base + offset) as *mut std::ffi::c_void,
+                )?;
+
+                // Read full word. No need to preserve other data
+                if (read_op.len - offset) >= long_size {
+                    // todo: document unsafety
+                    unsafe {
+                        *((read_op.local_ptr as usize + offset) as *mut i64) = data;
+                    }
+
+                // Read part smaller than word. Need to preserve other data
+                } else {
+                    // todo: document unsafety
+                    unsafe {
+                        let previous_bytes: &mut [u8] = std::slice::from_raw_parts_mut(
+                            (read_op.local_ptr as usize + offset) as *mut u8,
+                            read_op.len - offset,
+                        );
+                        let data_bytes = data.to_ne_bytes();
+
+                        previous_bytes[0..(read_op.len - offset)]
+                            .clone_from_slice(&data_bytes[0..(read_op.len - offset)]);
+                    }
+                }
+                offset += long_size;
+            }
+        }
+        Ok(())
     }
 }
 
