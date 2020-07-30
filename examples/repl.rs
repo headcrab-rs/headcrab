@@ -231,7 +231,12 @@ mod example {
                     );
                 }
             }
-            Some("patch") => {
+
+            // Patch the `pause` instruction inside a function called `breakpoint` to be a
+            // breakpoint. This is useful while we don't have support for setting breakpoints at
+            // runtime yet.
+            // FIXME remove once real breakpoint support is added
+            Some("_patch_breakpoint_function") => {
                 context.load_debuginfo_if_necessary()?;
                 // Test that `a_function` resolves to a function.
                 let breakpoint_addr = context.debuginfo().get_symbol_address("breakpoint").unwrap() + 4 /* prologue */;
@@ -246,7 +251,11 @@ mod example {
                         .unwrap();
                 }
                 // pause (rep nop); ...
-                assert_eq!(&pause_inst.to_ne_bytes()[0..2], &[0xf3, 0x90]);
+                assert_eq!(
+                    &pause_inst.to_ne_bytes()[0..2],
+                    &[0xf3, 0x90],
+                    "Pause instruction not found"
+                );
                 let mut breakpoint_inst = pause_inst.to_ne_bytes();
                 // int3; nop; ...
                 breakpoint_inst[0] = 0xcc;
