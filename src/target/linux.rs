@@ -9,6 +9,10 @@ use std::{
 
 use crate::target::unix::{self, UnixTarget};
 
+lazy_static! {
+    static ref PAGE_SIZE: usize = unsafe { libc::sysconf(libc::_SC_PAGESIZE) as usize };
+}
+
 /// This structure holds the state of a debuggee on Linux based systems
 /// You can use it to read & write debuggee's memory, pause it, set breakpoints, etc.
 pub struct LinuxTarget {
@@ -180,17 +184,12 @@ impl ReadOp {
 
     /// Splits ReadOp so that each resulting ReadOp resides in only one memory page.
     fn split_on_page_boundary(&self) -> Vec<ReadOp> {
-        let page_size: usize;
-        unsafe {
-            page_size = libc::sysconf(libc::_SC_PAGESIZE) as usize;
-        }
-
         let mut out = Vec::new();
 
         // Number of bytes left to be read
         let mut left = self.len;
 
-        let next_page_distance = page_size - ((page_size - 1) & self.remote_base);
+        let next_page_distance = *PAGE_SIZE - ((*PAGE_SIZE - 1) & self.remote_base);
         let to_next_read_op = std::cmp::min(left, next_page_distance);
         // Read from remote_base to the end or to the next page
         out.push(ReadOp {
@@ -201,7 +200,7 @@ impl ReadOp {
         left -= to_next_read_op;
 
         while left > 0 {
-            if left < page_size {
+            if left < *PAGE_SIZE {
                 // Read from beginning of the page to a part in the middle (last read)
                 out.push(ReadOp {
                     remote_base: self.remote_base + (self.len - left),
@@ -213,10 +212,10 @@ impl ReadOp {
                 // Whole page is being read
                 out.push(ReadOp {
                     remote_base: self.remote_base + (self.len - left),
-                    len: page_size,
+                    len: *PAGE_SIZE,
                     local_ptr: (self.local_ptr as usize + (self.len - left)) as *mut libc::c_void,
                 });
-                left -= page_size;
+                left -= *PAGE_SIZE;
             }
         }
         out
@@ -336,13 +335,10 @@ impl<'a> ReadMemory<'a> {
 
         let maps = self.target.memory_maps()?;
 
-        let mut protected_maps = maps
+        let protected_maps = maps
             .iter()
             .filter(|map| !map.is_readable)
             .collect::<Vec<_>>();
-
-        // Not sure if required
-        protected_maps.sort_by(|a, b| a.address.0.cmp(&b.address.0));
 
         let (protected, readable): (_, Vec<_>) = read_ops.iter().partition(|read_op| {
             protected_maps
