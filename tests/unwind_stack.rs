@@ -38,13 +38,14 @@ fn unwind_stack() -> Result<(), Box<dyn std::error::Error>> {
         target.read().read(&mut stack, regs.rsp as usize).apply()?;
     }
 
-    let call_stack: Vec<_> = headcrab::symbol::unwind::naive_unwinder(&debuginfo, &stack[..], regs.rip as usize)
-        .map(|func| {
-            debuginfo
-                .get_address_symbol_name(func)
-                .unwrap_or_else(|| "<unknown>".to_string())
-        })
-        .collect();
+    let call_stack: Vec<_> =
+        headcrab::symbol::unwind::naive_unwinder(&debuginfo, &stack[..], regs.rip as usize)
+            .map(|func| {
+                debuginfo
+                    .get_address_symbol_name(func)
+                    .unwrap_or_else(|| "<unknown>".to_string())
+            })
+            .collect();
 
     let expected = &[
         "breakpoint",

@@ -47,7 +47,10 @@ fn read_memory() -> Result<(), Box<dyn std::error::Error>> {
 
     // Test that invalid addresses don't resolve to a symbol.
     assert_eq!(
-        debuginfo.get_address_symbol_name(0).as_ref().map(|name| &**name),
+        debuginfo
+            .get_address_symbol_name(0)
+            .as_ref()
+            .map(|name| &**name),
         None,
     );
 

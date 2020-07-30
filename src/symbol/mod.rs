@@ -398,7 +398,9 @@ impl RelocatedDwarf {
             if (addr as u64) < entry.address_range.0 || addr as u64 >= entry.address_range.1 {
                 continue;
             }
-            return entry.dwarf.get_address_symbol_name(addr - entry.bias as usize);
+            return entry
+                .dwarf
+                .get_address_symbol_name(addr - entry.bias as usize);
         }
         None
     }
@@ -408,7 +410,9 @@ impl RelocatedDwarf {
             if (addr as u64) < entry.address_range.0 || addr as u64 >= entry.address_range.1 {
                 continue;
             }
-            return entry.dwarf.get_address_symbol_kind(addr - entry.bias as usize);
+            return entry
+                .dwarf
+                .get_address_symbol_kind(addr - entry.bias as usize);
         }
         None
     }
