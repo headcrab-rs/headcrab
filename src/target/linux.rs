@@ -175,7 +175,6 @@ impl ReadOp {
     /// Splits ReadOp so that each resulting ReadOp resides in only one memory page.
     fn split_on_page_boundary(&self) -> Vec<ReadOp> {
         let page_size: usize;
-
         unsafe {
             page_size = libc::sysconf(libc::_SC_PAGESIZE) as usize;
         }
@@ -261,19 +260,6 @@ impl<'a> ReadMemory<'a> {
 
     /// Executes the memory read operation.
     pub fn apply(self) -> Result<(), Box<dyn std::error::Error>> {
-        // Create a list of `IoVec`s and remote `IoVec`s
-        let remote_iov = self
-            .read_ops
-            .iter()
-            .map(ReadOp::as_remote_iovec)
-            .collect::<Vec<_>>();
-
-        let local_iov = self
-            .read_ops
-            .iter()
-            .map(ReadOp::as_local_iovec)
-            .collect::<Vec<_>>();
-
         let read_len = self
             .read_ops
             .iter()
@@ -282,6 +268,39 @@ impl<'a> ReadMemory<'a> {
         if read_len > isize::MAX as usize {
             panic!("Read size too big");
         };
+
+        // FIXME: Probably a better way to do this
+        let result = self.read_process_vm(
+            &self
+                .read_ops
+                .iter()
+                .map(|read_op| read_op)
+                .collect::<Vec<_>>(),
+        );
+
+        if result.is_err() && result.unwrap_err() == nix::Error::Sys(nix::errno::Errno::EFAULT)
+            || result.is_ok() && result.unwrap() != read_len as isize
+        {
+            let (protected, readable) = self.split_protected(&self.read_ops)?;
+
+            self.read_process_vm(&readable)?;
+            self.read_ptrace(&protected)?;
+        }
+        Ok(())
+    }
+
+    /// Allows to read from several different locations with one system call.
+    /// It will ignore pages that are not readable. Returns number of bytes read at granularity of ReadOps.
+    fn read_process_vm(&self, read_ops: &[&ReadOp]) -> Result<isize, nix::Error> {
+        let remote_iov = read_ops
+            .iter()
+            .map(|read_op| read_op.as_remote_iovec())
+            .collect::<Vec<_>>();
+
+        let local_iov = read_ops
+            .iter()
+            .map(|read_op| read_op.as_local_iovec())
+            .collect::<Vec<_>>();
 
         let bytes_read = unsafe {
             // todo: document unsafety
@@ -295,63 +314,47 @@ impl<'a> ReadMemory<'a> {
             )
         };
 
-        if bytes_read < read_len as isize {
-            let maps = Process::new(self.pid.as_raw())?.maps()?;
-
-            let protected_maps = maps
-                .iter()
-                .filter(|map| map.perms.chars().nth(0) != Some('r'))
-                .collect::<Vec<_>>();
-
-            // Splits readOps to those that read from read protected memory and those that do not.
-            let (protected, readable): (_, Vec<_>) =
-                self.read_ops.into_iter().partition(|read_op| {
-                    protected_maps.iter().any(|map| {
-                        map.address.0 as usize <= read_op.remote_base
-                            && read_op.remote_base < map.address.1 as usize
-                    })
-                });
-
-            // Read data that can be read using libc::process_vm_readv
-            let new_remote_iov = readable
-                .iter()
-                .map(ReadOp::as_remote_iovec)
-                .collect::<Vec<_>>();
-
-            let new_local_iov = readable
-                .iter()
-                .map(ReadOp::as_local_iovec)
-                .collect::<Vec<_>>();
-
-            let new_bytes_read = unsafe {
-                // todo: document unsafety
-                libc::process_vm_readv(
-                    self.pid.into(),
-                    new_local_iov.as_ptr(),
-                    new_local_iov.len() as libc::c_ulong,
-                    new_remote_iov.as_ptr(),
-                    new_remote_iov.len() as libc::c_ulong,
-                    0,
-                )
-            };
-
-            if new_bytes_read == -1 {
-                return Err(Box::new(nix::Error::last()));
-            }
-
-            // Read rest of the data using PTRACE_PEEKDATA
-            for read_op in protected {
-                unix::read(
-                    self.pid,
-                    read_op.remote_base,
-                    read_op.len,
-                    read_op.local_ptr,
-                )?;
-            }
+        if bytes_read == -1 {
+            return Err(nix::Error::last());
         }
 
-        // fixme: check that it's an expected number of read bytes and account for partial reads
+        Ok(bytes_read)
+    }
+
+    /// Allows to read from protected memory pages.
+    /// This operation results in multiple system calls and is inefficient.
+    fn read_ptrace(&self, read_ops: &[&ReadOp]) -> Result<(), Box<dyn std::error::Error>> {
+        for read_op in read_ops {
+            unix::read(
+                self.pid,
+                read_op.remote_base,
+                read_op.len,
+                read_op.local_ptr,
+            )?;
+        }
         Ok(())
+    }
+
+    /// Splits readOps to those that read from read protected memory and those that do not.
+    fn split_protected(
+        &self,
+        read_ops: &'a [ReadOp],
+    ) -> Result<(Vec<&'a ReadOp>, Vec<&'a ReadOp>), Box<dyn std::error::Error>> {
+        let maps = Process::new(self.pid.as_raw())?.maps()?;
+
+        let protected_maps = maps
+            .iter()
+            .filter(|map| map.perms.chars().nth(0) != Some('r'))
+            .collect::<Vec<_>>();
+
+        let (protected, readable): (_, Vec<_>) = read_ops.into_iter().partition(|read_op| {
+            protected_maps.iter().any(|map| {
+                map.address.0 as usize <= read_op.remote_base
+                    && read_op.remote_base < map.address.1 as usize
+            })
+        });
+
+        Ok((protected, readable))
     }
 }
 

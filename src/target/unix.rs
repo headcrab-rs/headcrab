@@ -86,15 +86,14 @@ pub(crate) fn read(
     let long_size = std::mem::size_of::<std::os::raw::c_long>();
 
     let mut offset: usize = 0;
-
     while offset < len {
         let data = ptrace::read(pid, (remote_base + offset) as *mut std::ffi::c_void)
-            .or_else(|err| return Err(err))?;
+            .or_else(|err| Err(err))?;
 
         if (len - offset) >= long_size {
             // todo: document unsafety
             unsafe {
-                *((local_ptr as usize + offset) as *mut i64) = data;
+                *((local_ptr as usize + offset) as *mut i64) = data.into();
             }
         } else {
             unsafe {
