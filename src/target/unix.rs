@@ -36,6 +36,12 @@ pub trait UnixTarget {
         let status = waitpid(self.pid(), None)?;
         Ok(status)
     }
+
+    /// Kill debuggee when debugger exits.
+    fn kill_on_exit(&self) -> Result<(), Box<dyn std::error::Error>> {
+        ptrace::setoptions(self.pid(), ptrace::Options::PTRACE_O_EXITKILL)?;
+        Ok(())
+    }
 }
 
 /// Launch a new debuggee process.
@@ -48,6 +54,7 @@ pub(in crate::target) fn launch(
     match fork()? {
         ForkResult::Parent { child, .. } => {
             let status = waitpid(child, None)?;
+
             Ok((child, status))
         }
         ForkResult::Child => {

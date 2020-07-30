@@ -27,7 +27,9 @@ impl LinuxTarget {
         path: &str,
     ) -> Result<(LinuxTarget, nix::sys::wait::WaitStatus), Box<dyn std::error::Error>> {
         let (pid, status) = unix::launch(path)?;
-        Ok((LinuxTarget { pid }, status))
+        let target = LinuxTarget { pid };
+        target.kill_on_exit()?;
+        Ok((target, status))
     }
 
     /// Attaches process as a debugee.
