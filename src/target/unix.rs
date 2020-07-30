@@ -1,6 +1,6 @@
 use nix::{
     sys::ptrace,
-    sys::wait::waitpid,
+    sys::wait::{waitpid, WaitStatus},
     unistd::{execv, fork, ForkResult, Pid},
 };
 use std::ffi::CString;
@@ -10,25 +10,46 @@ pub trait UnixTarget {
     /// Provides the Pid of the debugee process
     fn pid(&self) -> Pid;
 
+    /// Step the debuggee one instruction further.
+    fn step(&self) -> Result<WaitStatus, Box<dyn std::error::Error>> {
+        ptrace::step(self.pid(), None)?;
+        let status = waitpid(self.pid(), None)?;
+        Ok(status)
+    }
+
     /// Continues execution of a debuggee.
-    fn unpause(&self) -> Result<(), Box<dyn std::error::Error>> {
+    fn unpause(&self) -> Result<WaitStatus, Box<dyn std::error::Error>> {
         ptrace::cont(self.pid(), None)?;
-        waitpid(self.pid(), None).unwrap();
+        let status = waitpid(self.pid(), None)?;
+        Ok(status)
+    }
+
+    /// Detach from the debuggee, continuing its execution.
+    fn detach(&self) -> Result<(), Box<dyn std::error::Error>> {
+        ptrace::detach(self.pid(), None)?;
         Ok(())
+    }
+
+    /// Kills the debuggee.
+    fn kill(&self) -> Result<WaitStatus, Box<dyn std::error::Error>> {
+        ptrace::kill(self.pid())?;
+        let status = waitpid(self.pid(), None)?;
+        Ok(status)
     }
 }
 
 /// Launch a new debuggee process.
-pub(crate) fn launch(path: &str) -> Result<Pid, Box<dyn std::error::Error>> {
+pub(in crate::target) fn launch(
+    path: &str,
+) -> Result<(Pid, WaitStatus), Box<dyn std::error::Error>> {
     // We start the debuggee by forking the parent process.
     // The child process invokes `ptrace(2)` with the `PTRACE_TRACEME` parameter to enable debugging features for the parent.
     // This requires a user to have a `SYS_CAP_PTRACE` permission. See `man capabilities(7)` for more information.
     match fork()? {
         ForkResult::Parent { child, .. } => {
-            let _status = waitpid(child, None);
+            let status = waitpid(child, None)?;
 
-            // todo: handle this properly
-            Ok(child)
+            Ok((child, status))
         }
         ForkResult::Child => {
             ptrace::traceme()?;
@@ -50,8 +71,8 @@ pub(crate) fn launch(path: &str) -> Result<Pid, Box<dyn std::error::Error>> {
 }
 
 /// Attach existing process as a debugee.
-pub(crate) fn attach(pid: Pid) -> Result<(), Box<dyn std::error::Error>> {
+pub(in crate::target) fn attach(pid: Pid) -> Result<WaitStatus, Box<dyn std::error::Error>> {
     ptrace::attach(pid)?;
-    let _status = waitpid(pid, None);
-    Ok(())
+    let status = waitpid(pid, None)?;
+    Ok(status)
 }

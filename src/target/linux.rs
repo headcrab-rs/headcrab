@@ -51,15 +51,21 @@ impl UnixTarget for LinuxTarget {
 
 impl LinuxTarget {
     /// Launches a new debuggee process
-    pub fn launch(path: &str) -> Result<LinuxTarget, Box<dyn std::error::Error>> {
-        let pid = unix::launch(path)?;
-        Ok(LinuxTarget { pid })
+    pub fn launch(
+        path: &str,
+    ) -> Result<(LinuxTarget, nix::sys::wait::WaitStatus), Box<dyn std::error::Error>> {
+        let (pid, status) = unix::launch(path)?;
+        let target = LinuxTarget { pid };
+        target.kill_on_exit()?;
+        Ok((target, status))
     }
 
     /// Attaches process as a debugee.
-    pub fn attach(pid: Pid) -> Result<LinuxTarget, Box<dyn std::error::Error>> {
-        unix::attach(pid)?;
-        Ok(LinuxTarget { pid })
+    pub fn attach(
+        pid: Pid,
+    ) -> Result<(LinuxTarget, nix::sys::wait::WaitStatus), Box<dyn std::error::Error>> {
+        let status = unix::attach(pid)?;
+        Ok((LinuxTarget { pid }, status))
     }
 
     /// Uses this process as a debuggee.
@@ -164,6 +170,12 @@ impl LinuxTarget {
                 },
             })
             .collect())
+    }
+
+    /// Kill debuggee when debugger exits.
+    fn kill_on_exit(&self) -> Result<(), Box<dyn std::error::Error>> {
+        nix::sys::ptrace::setoptions(self.pid, nix::sys::ptrace::Options::PTRACE_O_EXITKILL)?;
+        Ok(())
     }
 
     /// Returns the current snapshot view of this debugee process threads.

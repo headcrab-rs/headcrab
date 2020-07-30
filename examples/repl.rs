@@ -74,7 +74,10 @@ mod example {
         if let Some(exec_cmd) = exec_cmd {
             println!("Starting program: {}", exec_cmd);
             context.remote = Some(match LinuxTarget::launch(&exec_cmd) {
-                Ok(target) => target,
+                Ok((target, status)) => {
+                    println!("{:?}", status);
+                    target
+                }
                 Err(err) => {
                     println!("\x1b[91mError while launching debuggee: {}\x1b[0m", err);
                     std::process::exit(1);
@@ -125,17 +128,29 @@ mod example {
             Some("exec") => {
                 if let Some(cmd) = parts.next() {
                     println!("Starting program: {}", cmd);
-                    context.remote = Some(LinuxTarget::launch(cmd)?);
+                    let (remote, status) = LinuxTarget::launch(cmd)?;
+                    println!("{:?}", status);
+                    // FIXME detach or kill old remote
+                    context.remote = Some(remote);
                 }
             }
             Some("attach") => {
                 if let Some(pid) = parts.next() {
                     let pid = nix::unistd::Pid::from_raw(pid.parse()?);
                     println!("Attaching to process {}", pid);
-                    context.remote = Some(LinuxTarget::attach(pid)?);
+                    let (remote, status) = LinuxTarget::attach(pid)?;
+                    println!("{:?}", status);
+                    // FIXME detach or kill old remote
+                    context.remote = Some(remote);
                 }
             }
-            Some("cont") | Some("continue") => context.remote()?.unpause()?,
+            Some("detach") => {
+                context.remote()?.detach()?;
+                context.remote = None;
+            }
+            Some("kill") => println!("{:?}", context.remote()?.kill()?),
+            Some("stepi") => println!("{:?}", context.remote()?.step()?),
+            Some("cont") | Some("continue") => println!("{:?}", context.remote()?.unpause()?),
             Some("regs") => match parts.next() {
                 Some("read") => println!("{:?}", context.remote()?.read_regs()?),
                 Some(sub) => Err(format!("Unknown `regs` subcommand `{}`", sub))?,
