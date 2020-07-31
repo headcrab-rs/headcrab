@@ -138,8 +138,12 @@ mod example {
                 if let Some(pid) = parts.next() {
                     let pid = nix::unistd::Pid::from_raw(pid.parse()?);
                     println!("Attaching to process {}", pid);
-                    let (remote, status) =
-                        LinuxTarget::attach(pid, AttachOptions { kill_on_exit: true })?;
+                    let (remote, status) = LinuxTarget::attach(
+                        pid,
+                        AttachOptions {
+                            kill_on_exit: false,
+                        },
+                    )?;
                     println!("{:?}", status);
                     // FIXME detach or kill old remote
                     context.remote = Some(remote);
