@@ -50,6 +50,12 @@ pub struct LinuxTarget {
     pid: Pid,
 }
 
+/// This structure is used to pass options to attach
+pub struct AttachOptions {
+    /// Determines whether process will be killed on debugger exit or crash.
+    pub kill_on_exit: bool,
+}
+
 impl UnixTarget for LinuxTarget {
     /// Provides the Pid of the debugee process
     fn pid(&self) -> Pid {
@@ -71,9 +77,16 @@ impl LinuxTarget {
     /// Attaches process as a debugee.
     pub fn attach(
         pid: Pid,
+        options: AttachOptions,
     ) -> Result<(LinuxTarget, nix::sys::wait::WaitStatus), Box<dyn std::error::Error>> {
         let status = unix::attach(pid)?;
-        Ok((LinuxTarget { pid }, status))
+        let target = LinuxTarget { pid };
+
+        if options.kill_on_exit {
+            target.kill_on_exit()?;
+        }
+
+        Ok((target, status))
     }
 
     /// Uses this process as a debuggee.
@@ -470,7 +483,7 @@ pub fn get_addr_range(pid: Pid) -> Result<usize, Box<dyn std::error::Error>> {
 mod tests {
     use super::*;
 
-    use super::{LinuxTarget, ReadMemory};
+    use super::{AttachOptions, LinuxTarget, ReadMemory};
     use nix::unistd::{fork, getpid, ForkResult};
     use std::sync::{Arc, Barrier};
     use std::thread;
@@ -541,7 +554,8 @@ mod tests {
                     thread::sleep(time::Duration::from_millis(100));
 
                     let (target, _wait_status) =
-                        LinuxTarget::attach(child).expect("Couldn't attach to child");
+                        LinuxTarget::attach(child, AttachOptions { kill_on_exit: true })
+                            .expect("Couldn't attach to child");
 
                     target
                         .read()
@@ -598,7 +612,8 @@ mod tests {
                     thread::sleep(time::Duration::from_millis(100));
 
                     let (target, _wait_status) =
-                        LinuxTarget::attach(child).expect("Couldn't attach to child");
+                        LinuxTarget::attach(child, AttachOptions { kill_on_exit: true })
+                            .expect("Couldn't attach to child");
 
                     target
                         .read()
