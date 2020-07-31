@@ -1,7 +1,7 @@
 use crate::target::thread::Thread;
 use crate::target::unix::{self, UnixTarget};
 use nix::unistd::{getpid, Pid};
-use procfs::process::Process;
+use procfs::process::{Process, Task};
 use procfs::ProcError;
 use std::{
     fs::File,
@@ -11,28 +11,31 @@ use std::{
 };
 
 struct LinuxThread {
-    name: String,
-    id: i32,
+    task: Task,
 }
 
 impl LinuxThread {
-    fn new(name: impl Into<String>, id: i32) -> LinuxThread {
-        LinuxThread {
-            name: name.into(),
-            id,
-        }
+    fn new(task: Task) -> LinuxThread {
+        LinuxThread { task }
     }
 }
 
 impl Thread for LinuxThread {
     type ThreadId = i32;
 
-    fn name(&self) -> Option<String> {
-        Some(self.name.clone())
+    fn name(&self) -> Result<Option<String>, Box<dyn std::error::Error>> {
+        match self.task.stat() {
+            Ok(t_stat) => Ok(Some(t_stat.comm.clone())),
+            Err(ProcError::NotFound(_)) | Err(ProcError::Incomplete(_)) => {
+                // ok to skip. Thread is gone or it's page is not complete yet.
+                Ok(None)
+            }
+            Err(err) => Err(Box::new(err)),
+        }
     }
 
     fn thread_id(&self) -> Self::ThreadId {
-        self.id
+        self.task.tid
     }
 }
 
@@ -185,22 +188,10 @@ impl LinuxTarget {
         let tasks: Vec<_> = Process::new(self.pid.as_raw())?
             .tasks()?
             .flatten()
+            .map(|task| Box::new(LinuxThread::new(task)) as Box<dyn Thread<ThreadId = i32>>)
             .collect();
 
-        let mut result: Vec<Box<dyn Thread<ThreadId = i32>>> = vec![];
-        for task in tasks {
-            match task.stat() {
-                Ok(t_stat) => {
-                    let thread = LinuxThread::new(&t_stat.comm, task.tid);
-                    result.push(Box::new(thread));
-                }
-                Err(ProcError::NotFound(_)) | Err(ProcError::Incomplete(_)) => {
-                    // ok to skip. Thread is gone or it's page is not complete yet.
-                }
-                Err(err) => return Err(Box::new(err)),
-            }
-        }
-        Ok(result)
+        Ok(tasks)
     }
 }
 
@@ -450,7 +441,7 @@ mod tests {
 
         let threads: Vec<_> = threads
             .iter()
-            .map(|t| (t.name().unwrap().clone(), t.thread_id()))
+            .map(|t| (t.name().unwrap().unwrap().clone(), t.thread_id()))
             .collect();
 
         // Not always consistent: see https://github.com/rust-lang/rust/issues/74845
