@@ -66,8 +66,7 @@ impl WriteOp {
     /// Breaks the memory write operation into groups of words suitable for writing
     /// with `ptrace::write`.
     unsafe fn as_ptrace(&self) -> Vec<WriteOp> {
-        let mut output =
-            Vec::with_capacity(f64::ceil(self.source_len as f64 / WORD_SIZE as f64) as usize);
+        let mut output = Vec::with_capacity((self.source_len + WORD_SIZE - 1) / WORD_SIZE);
 
         let WriteOp {
             mut source_len,
@@ -176,7 +175,7 @@ mod tests {
         sys::{ptrace, signal, wait},
         unistd::{fork, getpid, getppid, ForkResult},
     };
-    use std::mem;
+    use std::{mem, ptr};
 
     #[test]
     fn write_memory_proc_vm() {
@@ -194,8 +193,10 @@ mod tests {
             write_process_vm(write_mem.pid, &write_mem.write_ops).expect("Failed to write memory")
         };
 
-        assert_eq!(write_var2_op, var2);
-        assert_eq!(write_var_op, var);
+        unsafe {
+            assert_eq!(ptr::read_volatile(&write_var_op), var);
+            assert_eq!(ptr::read_volatile(&write_var2_op), var2);
+        }
     }
 
     #[test]
@@ -228,8 +229,10 @@ mod tests {
             Ok(ForkResult::Parent { child, .. }) => {
                 wait::waitpid(child, None).unwrap();
 
-                assert_eq!(write_var_op, var);
-                assert_eq!(write_var2_op, var2);
+                unsafe {
+                    assert_eq!(ptr::read_volatile(&write_var_op), var);
+                    assert_eq!(ptr::read_volatile(&write_var2_op), var2);
+                }
             }
             Err(x) => panic!(x),
         }
