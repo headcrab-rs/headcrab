@@ -38,11 +38,11 @@ impl<'a> WriteMemory<'a> {
 /// A single memory write operation.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct WriteOp {
-    // Remote destation location.
+    /// Remote destation location.
     remote_base: usize,
-    // Pointer to a source.
+    /// Pointer to a source.
     source_ptr: *const libc::c_void,
-    // Size of `source_ptr`.
+    /// Size of `source_ptr`.
     source_len: usize,
 }
 
