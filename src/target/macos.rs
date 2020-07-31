@@ -1,5 +1,6 @@
 mod readmem;
 mod vmmap;
+mod writemem;
 
 use crate::target::thread::Thread;
 use libc::pid_t;
@@ -24,6 +25,7 @@ use std::{
 };
 
 pub use readmem::ReadMemory;
+pub use writemem::WriteMemory;
 
 // Undocumented flag to disable address space layout randomization.
 // For more information about ASLR, you can refer to https://en.wikipedia.org/wiki/Address_space_layout_randomization
