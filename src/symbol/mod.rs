@@ -70,7 +70,7 @@ pub struct ParsedDwarf<'a> {
 
 impl<'a> ParsedDwarf<'a> {
     pub fn new(bytes: &'a [u8]) -> Result<ParsedDwarf<'a>, Box<dyn std::error::Error>> {
-        // This is completely inefficient and hacky code, but currently it serves the only
+        // This is completely inefficient and hackish code, but currently it serves the only
         // purpose of getting addresses of static variables.
         // TODO: this will be reworked in a more complete symbolication framework.
 
