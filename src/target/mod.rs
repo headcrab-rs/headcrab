@@ -13,6 +13,8 @@ mod macos;
 #[cfg(target_os = "macos")]
 pub use macos::*;
 
+mod thread;
+
 #[derive(Debug)]
 pub struct MemoryMap {
     /// Start and end range of the mapped memory.

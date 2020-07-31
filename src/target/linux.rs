@@ -1,5 +1,9 @@
+use crate::target::thread::Thread;
+use crate::target::unix::{self, UnixTarget};
 use nix::sys::ptrace;
 use nix::unistd::{getpid, Pid};
+use procfs::process::{Process, Task};
+use procfs::ProcError;
 use std::{
     fs::File,
     io::{BufRead, BufReader},
@@ -7,10 +11,37 @@ use std::{
     mem,
 };
 
-use crate::target::unix::{self, UnixTarget};
-
 lazy_static! {
     static ref PAGE_SIZE: usize = unsafe { libc::sysconf(libc::_SC_PAGESIZE) as usize };
+}
+
+struct LinuxThread {
+    task: Task,
+}
+
+impl LinuxThread {
+    fn new(task: Task) -> LinuxThread {
+        LinuxThread { task }
+    }
+}
+
+impl Thread for LinuxThread {
+    type ThreadId = i32;
+
+    fn name(&self) -> Result<Option<String>, Box<dyn std::error::Error>> {
+        match self.task.stat() {
+            Ok(t_stat) => Ok(Some(t_stat.comm.clone())),
+            Err(ProcError::NotFound(_)) | Err(ProcError::Incomplete(_)) => {
+                // ok to skip. Thread is gone or it's page is not complete yet.
+                Ok(None)
+            }
+            Err(err) => Err(Box::new(err)),
+        }
+    }
+
+    fn thread_id(&self) -> Self::ThreadId {
+        self.task.tid
+    }
 }
 
 /// This structure holds the state of a debuggee on Linux based systems
@@ -160,6 +191,19 @@ impl LinuxTarget {
     fn kill_on_exit(&self) -> Result<(), Box<dyn std::error::Error>> {
         nix::sys::ptrace::setoptions(self.pid, nix::sys::ptrace::Options::PTRACE_O_EXITKILL)?;
         Ok(())
+    }
+
+    /// Returns the current snapshot view of this debugee process threads.
+    pub fn threads(
+        &self,
+    ) -> Result<Vec<Box<dyn Thread<ThreadId = i32>>>, Box<dyn std::error::Error>> {
+        let tasks: Vec<_> = Process::new(self.pid.as_raw())?
+            .tasks()?
+            .flatten()
+            .map(|task| Box::new(LinuxThread::new(task)) as Box<dyn Thread<ThreadId = i32>>)
+            .collect();
+
+        Ok(tasks)
     }
 }
 
@@ -424,8 +468,12 @@ pub fn get_addr_range(pid: Pid) -> Result<usize, Box<dyn std::error::Error>> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     use super::{LinuxTarget, ReadMemory};
     use nix::unistd::{fork, getpid, ForkResult};
+    use std::sync::{Arc, Barrier};
+    use std::thread;
 
     use std::alloc::{alloc_zeroed, dealloc, Layout};
 
@@ -571,5 +619,66 @@ mod tests {
                 Err(x) => panic!(x),
             }
         }
+    }
+
+    #[test]
+    fn reads_threads() -> Result<(), Box<dyn std::error::Error>> {
+        let start_barrier = Arc::new(Barrier::new(2));
+        let end_barrier = Arc::new(Barrier::new(2));
+
+        let t1_start = start_barrier.clone();
+        let t1_end = end_barrier.clone();
+
+        let thread_name = "thread_name";
+        let t1_handle = thread::Builder::new()
+            .name(thread_name.to_string())
+            .spawn(move || {
+                t1_start.wait();
+                t1_end.wait();
+            })
+            .unwrap();
+
+        start_barrier.wait();
+
+        let proc = LinuxTarget::me();
+        let threads = proc.threads()?;
+
+        let threads: Vec<_> = threads
+            .iter()
+            .map(|t| (t.name().unwrap().unwrap().clone(), t.thread_id()))
+            .collect();
+
+        // Not always consistent: see https://github.com/rust-lang/rust/issues/74845
+        let cargo_threads = std::env::var("RUST_TEST_THREADS")
+            .map(|s| s.parse::<usize>())
+            .unwrap_or(Ok(2))?;
+
+        // Using >= because we can't trust the cargo_threads number
+        assert!(
+            threads.len() >= cargo_threads + 1,
+            "Expected at least 3 threads in {:?}",
+            threads
+        );
+
+        // Find test pid in result:
+        let proc_pid = proc.pid().as_raw();
+        assert!(
+            threads.iter().any(|&(_, tid)| tid == proc_pid),
+            "Expected to find main pid={} in {:?}",
+            proc_pid,
+            threads
+        );
+
+        // Find thread name
+        assert!(
+            threads.iter().any(|(name, _)| name == thread_name),
+            "Expected to find thread name={} in {:?}",
+            thread_name,
+            threads
+        );
+
+        end_barrier.wait();
+        t1_handle.join().unwrap();
+        Ok(())
     }
 }
