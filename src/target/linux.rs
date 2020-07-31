@@ -11,7 +11,7 @@ use std::{
     mem,
 };
 
-lazy_static! {
+lazy_static::lazy_static! {
     static ref PAGE_SIZE: usize = unsafe { libc::sysconf(libc::_SC_PAGESIZE) as usize };
 }
 
