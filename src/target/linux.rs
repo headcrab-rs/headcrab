@@ -11,7 +11,7 @@ use std::{
     mem,
 };
 
-lazy_static! {
+lazy_static::lazy_static! {
     static ref PAGE_SIZE: usize = unsafe { libc::sysconf(libc::_SC_PAGESIZE) as usize };
 }
 
@@ -57,7 +57,7 @@ pub struct AttachOptions {
 }
 
 impl UnixTarget for LinuxTarget {
-    /// Provides the Pid of the debugee process
+    /// Provides the Pid of the debuggee process
     fn pid(&self) -> Pid {
         self.pid
     }
@@ -74,7 +74,7 @@ impl LinuxTarget {
         Ok((target, status))
     }
 
-    /// Attaches process as a debugee.
+    /// Attaches process as a debuggee.
     pub fn attach(
         pid: Pid,
         options: AttachOptions,
@@ -206,7 +206,7 @@ impl LinuxTarget {
         Ok(())
     }
 
-    /// Returns the current snapshot view of this debugee process threads.
+    /// Returns the current snapshot view of this debuggee process threads.
     pub fn threads(
         &self,
     ) -> Result<Vec<Box<dyn Thread<ThreadId = i32>>>, Box<dyn std::error::Error>> {
@@ -468,10 +468,10 @@ impl<'a> ReadMemory<'a> {
 /// This can be useful for calculation of relative addresses in memory.
 pub fn get_addr_range(pid: Pid) -> Result<usize, Box<dyn std::error::Error>> {
     let file = File::open(format!("/proc/{}/maps", pid))?;
-    let mut bufread = BufReader::new(file);
+    let mut buf_read = BufReader::new(file);
     let mut proc_map = String::new();
 
-    bufread.read_line(&mut proc_map)?;
+    buf_read.read_line(&mut proc_map)?;
 
     let proc_data: Vec<_> = proc_map.split(' ').collect();
     let addr_range: Vec<_> = proc_data[0].split('-').collect();
@@ -509,7 +509,7 @@ mod tests {
                 .read(&mut read_var_op, &var as *const _ as usize)
                 .read(&mut read_var2_op, &var2 as *const _ as usize)
                 .apply()
-                .expect("Failed to apply memop");
+                .expect("Failed to apply mem_op");
         }
 
         assert_eq!(read_var2_op, var2);
@@ -619,7 +619,7 @@ mod tests {
                         .read()
                         .read(&mut read_var_op, array_ptr as *const _ as usize)
                         .apply()
-                        .expect("Failed to apply memop");
+                        .expect("Failed to apply mem_op");
 
                     for i in 0..PAGE_SIZE + 2 {
                         assert_eq!(var[i], read_var_op[i]);
