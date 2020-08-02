@@ -3,6 +3,6 @@
 /// Functions to work with target processes: reading & writing memory, process control functions, etc.
 pub mod target;
 
-#[cfg(unix)]
 /// Symbolication layer.
+#[cfg(unix)]
 pub mod symbol;
