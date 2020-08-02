@@ -1,6 +1,6 @@
 //! This is a simple test to attach to already running debugee process
 
-#[cfg(target_os = "unix")]
+#[cfg(unix)]
 use nix::unistd::{execv, fork, ForkResult};
 use std::ffi::CString;
 
