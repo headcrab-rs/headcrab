@@ -4,4 +4,5 @@
 pub mod target;
 
 /// Symbolication layer.
+#[cfg(unix)]
 pub mod symbol;

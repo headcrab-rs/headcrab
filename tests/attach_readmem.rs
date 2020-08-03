@@ -1,5 +1,6 @@
 //! This is a simple test to attach to already running debugee process
 
+#![cfg(unix)]
 use nix::unistd::{execv, fork, ForkResult};
 use std::ffi::CString;
 
