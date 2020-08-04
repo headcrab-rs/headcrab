@@ -1,13 +1,14 @@
 [package]
 name = "headcrab"
-version = "0.1.0"
-authors = ["Nikita Baksalyar <nikita.baksalyar@gmail.com>"]
+version = "0.2.0"
+authors = ["Headcrab Contributors"]
 edition = "2018"
 description = "A modern Rust debugging library."
-repository = "https://github.com/nbaksalyar/headcrab/"
+repository = "https://github.com/headcrab-rs/headcrab/"
 license = "MIT OR Apache-2.0"
 categories = ["development-tools::debugging"]
 documentation = "https://docs.rs/headcrab"
+homepage = "https://headcrab.rs/"
 readme = "README.md"
 
 [dependencies]
