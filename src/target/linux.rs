@@ -73,6 +73,7 @@ pub struct LinuxTarget {
 }
 
 /// This structure is used to pass options to attach
+#[derive(Default)]
 pub struct AttachOptions {
     /// Determines whether process will be killed on debugger exit or crash.
     pub kill_on_exit: bool,

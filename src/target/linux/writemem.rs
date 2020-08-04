@@ -1,3 +1,5 @@
+use super::memory::{split_protected, MemoryOp};
+use super::LinuxTarget;
 use nix::{sys::ptrace, unistd::Pid};
 use std::{cmp, marker::PhantomData, mem, slice};
 
@@ -6,20 +8,31 @@ const WORD_SIZE: usize = mem::size_of::<usize>();
 /// Allows to write data to different locations in debuggee's memory as a single operation.
 /// This implementation can select different strategies for different memory pages.
 pub struct WriteMemory<'a> {
-    pid: Pid,
+    target: &'a LinuxTarget,
     write_ops: Vec<WriteOp>,
+    /// We need only an immutable reference because we don't rewrite values of variables in `WriteOp`.
     _marker: PhantomData<&'a ()>,
 }
 
 impl<'a> WriteMemory<'a> {
-    pub(super) fn new(pid: Pid) -> Self {
+    pub(super) fn new(target: &'a LinuxTarget) -> Self {
         WriteMemory {
-            pid,
+            target,
             write_ops: Vec::new(),
             _marker: PhantomData,
         }
     }
 
+    /// Writes a value of type `T` into debuggee's memory at location `remote_base`.
+    /// The value will be read from the provided variable `val`.
+    /// You should call `apply` in order to execute the memory write operation.
+    /// The lifetime of the variable `val` is bound to the lifetime of `WriteMemory`.
+    ///
+    /// # Safety
+    ///
+    /// The type `T` must not have any invalid values.
+    /// For example `T` must not be a `bool`, as `transmute::<u8, bool>(2)` is not a valid value for a bool.
+    /// In case of doubt, wrap the type in [`mem::MaybeUninit`].
     pub fn write<T: ?Sized>(mut self, val: &'a T, remote_base: usize) -> Self {
         self.write_ops.push(WriteOp {
             remote_base,
@@ -31,12 +44,24 @@ impl<'a> WriteMemory<'a> {
 
     /// Executes the memory write operation.
     pub unsafe fn apply(self) -> Result<(), Box<dyn std::error::Error>> {
-        write_process_vm(self.pid, &self.write_ops)
+        let protected_maps = self
+            .target
+            .memory_maps()?
+            .into_iter()
+            .filter(|map| !map.is_writable)
+            .collect::<Vec<_>>();
+
+        let (protected, writable) = split_protected(&protected_maps, self.write_ops.into_iter())?;
+
+        write_process_vm(self.target.pid, &writable)?;
+        write_ptrace(self.target.pid, &protected)?;
+
+        Ok(())
     }
 }
 
 /// A single memory write operation.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Clone, Copy, Eq)]
 pub(crate) struct WriteOp {
     /// Remote destation location.
     remote_base: usize,
@@ -44,6 +69,12 @@ pub(crate) struct WriteOp {
     source_ptr: *const libc::c_void,
     /// Size of `source_ptr`.
     source_len: usize,
+}
+
+impl MemoryOp for WriteOp {
+    fn remote_base(&self) -> usize {
+        self.remote_base
+    }
 }
 
 impl WriteOp {
@@ -170,10 +201,11 @@ pub(crate) unsafe fn write_process_vm(
 #[cfg(test)]
 mod tests {
     use super::{write_process_vm, write_ptrace, WriteMemory, WriteOp};
+    use crate::target::LinuxTarget;
     use libc::c_void;
     use nix::{
         sys::{ptrace, signal, wait},
-        unistd::{fork, getpid, getppid, ForkResult},
+        unistd::{fork, getppid, ForkResult},
     };
     use std::{mem, ptr};
 
@@ -185,12 +217,14 @@ mod tests {
         let write_var_op: usize = 0;
         let write_var2_op: u8 = 0;
 
-        let write_mem = WriteMemory::new(getpid())
+        let target = LinuxTarget::me();
+
+        let write_mem = WriteMemory::new(&target)
             .write(&var, &write_var_op as *const _ as usize)
             .write(&var2, &write_var2_op as *const _ as usize);
 
         unsafe {
-            write_process_vm(write_mem.pid, &write_mem.write_ops).expect("Failed to write memory")
+            write_process_vm(target.pid, &write_mem.write_ops).expect("Failed to write memory")
         };
 
         unsafe {
@@ -213,15 +247,14 @@ mod tests {
         match fork() {
             Ok(ForkResult::Child) => {
                 let parent = getppid();
-                ptrace::attach(parent).unwrap();
+                let (target, _wait_stat) = LinuxTarget::attach(parent, Default::default()).unwrap();
 
-                let write_mem = WriteMemory::new(parent)
+                let write_mem = WriteMemory::new(&target)
                     .write(&var, &write_var_op as *const _ as usize)
                     .write(&var2, &write_var2_op as *const _ as usize);
 
                 unsafe {
-                    write_ptrace(write_mem.pid, &write_mem.write_ops)
-                        .expect("Failed to write memory")
+                    write_ptrace(target.pid, &write_mem.write_ops).expect("Failed to write memory")
                 };
 
                 ptrace::cont(parent, Some(signal::Signal::SIGCONT)).unwrap();

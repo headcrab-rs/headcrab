@@ -1,6 +1,6 @@
 use super::{
-    memory::{split_protected, MemoryOp},
-    LinuxTarget, PAGE_SIZE,
+    memory::{split_protected, MemoryOp, PAGE_SIZE},
+    LinuxTarget,
 };
 use nix::{sys::ptrace, unistd::Pid};
 use std::{cmp, marker::PhantomData, mem};
