@@ -6,6 +6,7 @@ use std::{marker::PhantomData, mem};
 pub struct ReadMemory<'a> {
     target: &'a LinuxTarget,
     read_ops: Vec<ReadOp>,
+    /// This requires a mutable reference because we rewrite values of variables in `ReadOp`.
     _marker: PhantomData<&'a mut ()>,
 }
 
@@ -27,7 +28,7 @@ impl<'a> ReadMemory<'a> {
     /// # Safety
     ///
     /// The type `T` must not have any invalid values.
-    /// For example `T` must not be a `bool`, as `transmute::<u8, bool>(2)` is not a valid value for a bool.
+    /// For example, `T` must not be a `bool`, as `transmute::<u8, bool>(2)` is not a valid value for a bool.
     /// In case of doubt, wrap the type in [`mem::MaybeUninit`].
     // todo: further document mem safety - e.g., what happens in the case of partial read
     pub unsafe fn read<T>(mut self, val: &'a mut T, remote_base: usize) -> Self {

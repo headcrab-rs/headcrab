@@ -194,7 +194,7 @@ impl LinuxTarget {
                         _ => None,
                     },
                     is_readable: perms.next() == Some('r'),
-                    is_writeable: perms.next() == Some('w'),
+                    is_writable: perms.next() == Some('w'),
                     is_executable: perms.next() == Some('x'),
                     is_private: perms.next() == Some('p'),
                 }

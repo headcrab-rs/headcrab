@@ -24,8 +24,8 @@ pub struct MemoryMap {
 
     /// Is mapped memory readable.
     pub is_readable: bool,
-    /// Is mapped memory writeable.
-    pub is_writeable: bool,
+    /// Is mapped memory writable.
+    pub is_writable: bool,
     /// Is mapped memory executable.
     pub is_executable: bool,
     /// Is mapped memory private.
