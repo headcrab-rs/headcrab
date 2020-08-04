@@ -13,7 +13,17 @@ use std::{
 
 lazy_static::lazy_static! {
     static ref PAGE_SIZE: usize = unsafe { libc::sysconf(libc::_SC_PAGESIZE) as usize };
+    static ref DEBUG_REG: usize = unsafe {
+        let x = std::mem::zeroed::<libc::user>();
+        (&x.u_debugreg as *const _ as usize) - (&x as *const _ as usize)
+    };
 }
+
+#[cfg(target_arch = "x86_64")]
+const SUPPORTED_HARDWARE_WATCHPOINTS: usize = 4;
+
+#[cfg(not(target_arch = "x86_64"))]
+const SUPPORTED_HARDWARE_WATCHPOINTS: usize = 0;
 
 struct LinuxThread {
     task: Task,
@@ -48,6 +58,7 @@ impl Thread for LinuxThread {
 /// You can use it to read & write debuggee's memory, pause it, set breakpoints, etc.
 pub struct LinuxTarget {
     pid: Pid,
+    watchpoints: [Option<Watchpoint>; SUPPORTED_HARDWARE_WATCHPOINTS],
 }
 
 /// This structure is used to pass options to attach
@@ -55,6 +66,47 @@ pub struct AttachOptions {
     /// Determines whether process will be killed on debugger exit or crash.
     pub kill_on_exit: bool,
 }
+
+pub struct Watchpoint {
+    typ: WatchpointType,
+    addr: usize,
+    size: WatchSize,
+    on_trap: std::boxed::Box<dyn FnMut(&Self)>,
+}
+
+pub enum WatchSize {
+    _1 = 0b00,
+    _2 = 0b01,
+    _4 = 0b11,
+    _8 = 0b10,
+}
+
+pub enum WatchpointType {
+    Execute,
+    Write,
+    Read,
+    ReadWrite,
+}
+
+#[derive(Debug, Clone)]
+pub enum WatchpointError {
+    NoEmptyWatchpoint,
+    DoesNotExist(usize),
+}
+
+impl std::fmt::Display for WatchpointError {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        let string = match self {
+            WatchpointError::NoEmptyWatchpoint => "No unused hardware options left".to_string(),
+            WatchpointError::DoesNotExist(index) => {
+                format!("Watchpoint at specified index ({}) does not exist", index)
+            }
+        };
+        write!(f, "{}", string)
+    }
+}
+
+impl std::error::Error for WatchpointError {}
 
 impl UnixTarget for LinuxTarget {
     /// Provides the Pid of the debuggee process
@@ -64,12 +116,19 @@ impl UnixTarget for LinuxTarget {
 }
 
 impl LinuxTarget {
+    fn new(pid: Pid) -> Self {
+        Self {
+            pid,
+            watchpoints: Default::default(),
+        }
+    }
+
     /// Launches a new debuggee process
     pub fn launch(
         path: &str,
     ) -> Result<(LinuxTarget, nix::sys::wait::WaitStatus), Box<dyn std::error::Error>> {
         let (pid, status) = unix::launch(path)?;
-        let target = LinuxTarget { pid };
+        let target = LinuxTarget::new(pid);
         target.kill_on_exit()?;
         Ok((target, status))
     }
@@ -80,7 +139,7 @@ impl LinuxTarget {
         options: AttachOptions,
     ) -> Result<(LinuxTarget, nix::sys::wait::WaitStatus), Box<dyn std::error::Error>> {
         let status = unix::attach(pid)?;
-        let target = LinuxTarget { pid };
+        let target = LinuxTarget::new(pid);
 
         if options.kill_on_exit {
             target.kill_on_exit()?;
@@ -91,7 +150,7 @@ impl LinuxTarget {
 
     /// Uses this process as a debuggee.
     pub fn me() -> LinuxTarget {
-        LinuxTarget { pid: getpid() }
+        LinuxTarget::new(getpid())
     }
 
     /// Reads memory from a debuggee process.
@@ -217,6 +276,103 @@ impl LinuxTarget {
             .collect();
 
         Ok(tasks)
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    pub fn set_watchpoint(
+        &mut self,
+        watchpoint: Watchpoint,
+    ) -> Result<usize, Box<dyn std::error::Error>> {
+        let empty = self.find_empty_watchpoint();
+        if empty.is_none() {
+            return Err(Box::new(WatchpointError::NoEmptyWatchpoint));
+        }
+        let index = empty.unwrap();
+
+        let rw_bits: u32 = match watchpoint.typ {
+            WatchpointType::Execute => 0b00,
+            WatchpointType::Read => 0b11,
+            WatchpointType::ReadWrite => 0b11,
+            WatchpointType::Write => 0b01,
+        } << 16 + index * 2;
+
+        let size_bits: u32 = (watchpoint.size as u32) << 18 + index * 2;
+
+        let enable_bit: u32 = 1 << (2 * index);
+
+        let bit_mask: u32 = (0b11 << (2 * index)) | (0b1111 << (16 + 4 * index));
+
+        let mut dr7: u64 = 0;
+
+        unsafe {
+            self.read().read(&mut dr7, *DEBUG_REG + 7 * 4).apply()?;
+        }
+
+        // Check if hardware watchpoint is already used
+        if dr7 & (1 << (2 * index)) != 0 {
+            // Panic for now
+            panic!("Invalid debug register state")
+        }
+
+        dr7 = (dr7 & !(bit_mask as u64)) | (enable_bit | rw_bits | size_bits) as u64;
+
+        // FIXME: Wait for write implementation
+        // Write addr and dr7
+        unimplemented!();
+
+        self.watchpoints[index] = Some(watchpoint);
+
+        Ok(index)
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    pub fn clear_watchpoint(
+        &mut self,
+        index: usize,
+    ) -> Result<Watchpoint, Box<dyn std::error::Error>> {
+        if self.watchpoints[index].is_none() {
+            return Err(Box::new(WatchpointError::DoesNotExist(index)));
+        }
+
+        let mut dr7: u64 = 0;
+        unsafe {
+            self.read().read(&mut dr7, *DEBUG_REG + 7 * 4).apply()?;
+        }
+
+        let bit_mask: u32 = (0b11 << (2 * index)) | (0b1111 << (16 + 4 * index));
+        dr7 = dr7 & !(bit_mask as u64);
+
+        // FIXME: Wait for write implementation
+        // Write addr and dr7
+        unimplemented!();
+
+        let watchpoint = std::mem::replace(&mut self.watchpoints[index], None);
+        Ok(watchpoint.unwrap())
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    pub fn clear_all_watchpoints(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        for index in 0..SUPPORTED_HARDWARE_WATCHPOINTS {
+            match self.watchpoints[index] {
+                Some(_) => {
+                    self.clear_watchpoint(index)?;
+                }
+                None => (),
+            };
+        }
+        Ok(())
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    fn find_empty_watchpoint(&self) -> Option<usize> {
+        let mut empty = None;
+        for i in 0..SUPPORTED_HARDWARE_WATCHPOINTS {
+            if self.watchpoints[i].is_none() {
+                empty = Some(i);
+                break;
+            }
+        }
+        return empty;
     }
 }
 
@@ -504,7 +660,7 @@ mod tests {
         let mut read_var2_op: u8 = 0;
 
         unsafe {
-            let target = LinuxTarget { pid: getpid() };
+            let target = LinuxTarget::new(getpid());
             ReadMemory::new(&target)
                 .read(&mut read_var_op, &var as *const _ as usize)
                 .read(&mut read_var2_op, &var2 as *const _ as usize)
