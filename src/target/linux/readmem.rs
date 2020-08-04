@@ -1,4 +1,7 @@
-use super::{LinuxTarget, PAGE_SIZE};
+use super::{
+    memory::{split_protected, MemoryOp},
+    LinuxTarget, PAGE_SIZE,
+};
 use nix::sys::ptrace;
 use std::{marker::PhantomData, mem};
 
@@ -67,7 +70,14 @@ impl<'a> ReadMemory<'a> {
         if result.is_err() && result.unwrap_err() == nix::Error::Sys(nix::errno::Errno::EFAULT)
             || result.is_ok() && result.unwrap() != read_len as isize
         {
-            let (protected, readable) = self.split_protected(&self.read_ops)?;
+            let protected_maps = self
+                .target
+                .memory_maps()?
+                .into_iter()
+                .filter(|map| !map.is_readable)
+                .collect::<Vec<_>>();
+
+            let (protected, readable) = split_protected(&protected_maps, &self.read_ops)?;
 
             self.read_process_vm(&readable)?;
             self.read_ptrace(&protected)?;
@@ -105,37 +115,6 @@ impl<'a> ReadMemory<'a> {
         }
 
         Ok(bytes_read)
-    }
-
-    /// Splits readOps to those that read from read protected memory and those that do not.
-    fn split_protected(
-        &self,
-        read_ops: &'a [ReadOp],
-    ) -> Result<(Vec<&'a ReadOp>, Vec<&'a ReadOp>), Box<dyn std::error::Error>> {
-        use std::cmp::Ordering;
-
-        let maps = self.target.memory_maps()?;
-
-        let protected_maps = maps
-            .iter()
-            .filter(|map| !map.is_readable)
-            .collect::<Vec<_>>();
-
-        let (protected, readable): (_, Vec<_>) = read_ops.iter().partition(|read_op| {
-            protected_maps
-                .binary_search_by(|map| {
-                    if read_op.remote_base < map.address.0 as usize {
-                        Ordering::Greater
-                    } else if read_op.remote_base > map.address.1 as usize {
-                        Ordering::Less
-                    } else {
-                        Ordering::Equal
-                    }
-                })
-                .is_ok()
-        });
-
-        Ok((protected, readable))
     }
 
     /// Allows to read from protected memory pages.
@@ -188,6 +167,12 @@ struct ReadOp {
     len: usize,
     // Pointer to a local destination buffer.
     local_ptr: *mut libc::c_void,
+}
+
+impl MemoryOp for ReadOp {
+    fn remote_base(&self) -> usize {
+        self.remote_base
+    }
 }
 
 impl ReadOp {

@@ -1,3 +1,4 @@
+mod memory;
 mod readmem;
 
 use crate::target::thread::Thread;
