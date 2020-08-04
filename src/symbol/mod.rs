@@ -341,10 +341,10 @@ impl RelocatedDwarfEntry {
                         let object: &object::File = &parsed.object;
                         object.segments().find_map(|segment: object::Segment| {
                             // Sometimes the offset is just before the start file offset of the segment.
-                            if offset <= segment.file_range().0 {
+                            if offset <= segment.file_range().0 + segment.file_range().1 {
                                 Some((
                                     segment.file_range(),
-                                    segment.address() - (segment.file_range().0 - offset),
+                                    segment.address() - segment.file_range().0 + offset,
                                 ))
                             } else {
                                 None
