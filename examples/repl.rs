@@ -10,10 +10,14 @@ fn main() {
 
 #[cfg(target_os = "linux")]
 mod example {
-    use headcrab::target::{AttachOptions, LinuxTarget, UnixTarget};
+    use headcrab::{
+        symbol::RelocatedDwarf,
+        target::{AttachOptions, LinuxTarget, UnixTarget},
+    };
 
     struct Context {
         remote: Option<LinuxTarget>,
+        debuginfo: Option<RelocatedDwarf>,
     }
 
     impl Context {
@@ -24,13 +28,34 @@ mod example {
                 Err("No running process".to_string().into())
             }
         }
+
+        fn set_remote(&mut self, remote: LinuxTarget) {
+            // FIXME kill/detach old remote
+            self.remote = Some(remote);
+            self.debuginfo = None;
+        }
+
+        fn load_debuginfo_if_necessary(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+            if self.debuginfo.is_none() {
+                let memory_maps = self.remote()?.memory_maps()?;
+                self.debuginfo = Some(RelocatedDwarf::from_maps(&memory_maps)?);
+            }
+            Ok(())
+        }
+
+        fn debuginfo(&self) -> &RelocatedDwarf {
+            self.debuginfo.as_ref().unwrap()
+        }
     }
 
     pub fn main() {
         let mut rl = rustyline::Editor::<()>::with_config(
             rustyline::Config::builder().auto_add_history(true).build(),
         );
-        let mut context = Context { remote: None };
+        let mut context = Context {
+            remote: None,
+            debuginfo: None,
+        };
 
         let mut cmds = vec![];
         let mut exec_cmd = None;
@@ -73,7 +98,7 @@ mod example {
 
         if let Some(exec_cmd) = exec_cmd {
             println!("Starting program: {}", exec_cmd);
-            context.remote = Some(match LinuxTarget::launch(&exec_cmd) {
+            context.set_remote(match LinuxTarget::launch(&exec_cmd) {
                 Ok((target, status)) => {
                     println!("{:?}", status);
                     target
@@ -130,8 +155,7 @@ mod example {
                     println!("Starting program: {}", cmd);
                     let (remote, status) = LinuxTarget::launch(cmd)?;
                     println!("{:?}", status);
-                    // FIXME detach or kill old remote
-                    context.remote = Some(remote);
+                    context.set_remote(remote);
                 }
             }
             Some("attach") => {
@@ -146,7 +170,7 @@ mod example {
                     )?;
                     println!("{:?}", status);
                     // FIXME detach or kill old remote
-                    context.remote = Some(remote);
+                    context.set_remote(remote);
                 }
             }
             Some("detach") => {
@@ -154,7 +178,7 @@ mod example {
                 context.remote = None;
             }
             Some("kill") => println!("{:?}", context.remote()?.kill()?),
-            Some("stepi") => println!("{:?}", context.remote()?.step()?),
+            Some("si") | Some("stepi") => println!("{:?}", context.remote()?.step()?),
             Some("cont") | Some("continue") => println!("{:?}", context.remote()?.unpause()?),
             Some("regs") => match parts.next() {
                 Some("read") => println!("{:?}", context.remote()?.read_regs()?),
@@ -163,6 +187,85 @@ mod example {
                     "Expected subcommand found nothing. Try `regs read`"
                 ))?,
             },
+            Some("bt") | Some("backtrace") => {
+                context.load_debuginfo_if_necessary()?;
+
+                let regs = context.remote()?.read_regs()?;
+
+                // Read stack
+                let mut stack: [usize; 1024] = [0; 1024];
+                unsafe {
+                    context
+                        .remote()?
+                        .read()
+                        .read(&mut stack, regs.rsp as usize)
+                        .apply()?;
+                }
+
+                let call_stack: Vec<_> = match parts.next() {
+                    Some("fp") | None => headcrab::symbol::unwind::frame_pointer_unwinder(
+                        context.debuginfo(),
+                        &stack[..],
+                        regs.rip as usize,
+                        regs.rsp as usize,
+                        regs.rbp as usize,
+                    )
+                    .collect(),
+                    Some("naive") => headcrab::symbol::unwind::naive_unwinder(
+                        context.debuginfo(),
+                        &stack[..],
+                        regs.rip as usize,
+                    )
+                    .collect(),
+                    Some(sub) => Err(format!("Unknown `bt` subcommand `{}`", sub))?,
+                };
+                for func in call_stack {
+                    println!(
+                        "{:016x} {}",
+                        func,
+                        context
+                            .debuginfo()
+                            .get_address_symbol_name(func)
+                            .as_deref()
+                            .unwrap_or("<unknown>")
+                    );
+                }
+            }
+
+            // Patch the `pause` instruction inside a function called `breakpoint` to be a
+            // breakpoint. This is useful while we don't have support for setting breakpoints at
+            // runtime yet.
+            // FIXME remove once real breakpoint support is added
+            Some("_patch_breakpoint_function") => {
+                context.load_debuginfo_if_necessary()?;
+                // Test that `a_function` resolves to a function.
+                let breakpoint_addr = context.debuginfo().get_symbol_address("breakpoint").unwrap() + 4 /* prologue */;
+                // Write breakpoint to the `breakpoint` function.
+                let mut pause_inst = 0 as libc::c_ulong;
+                unsafe {
+                    context
+                        .remote()?
+                        .read()
+                        .read(&mut pause_inst, breakpoint_addr)
+                        .apply()
+                        .unwrap();
+                }
+                // pause (rep nop); ...
+                assert_eq!(
+                    &pause_inst.to_ne_bytes()[0..2],
+                    &[0xf3, 0x90],
+                    "Pause instruction not found"
+                );
+                let mut breakpoint_inst = pause_inst.to_ne_bytes();
+                // int3; nop; ...
+                breakpoint_inst[0] = 0xcc;
+                nix::sys::ptrace::write(
+                    context.remote()?.pid(),
+                    breakpoint_addr as *mut _,
+                    libc::c_ulong::from_ne_bytes(breakpoint_inst) as *mut _,
+                )
+                .unwrap();
+            }
             Some("") | None => {}
             Some(command) => Err(format!("Unknown command `{}`", command))?,
         }
