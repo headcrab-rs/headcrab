@@ -13,7 +13,8 @@ use std::{
 
 lazy_static::lazy_static! {
     static ref PAGE_SIZE: usize = unsafe { libc::sysconf(libc::_SC_PAGESIZE) as usize };
-    static ref DEBUG_REG: usize = unsafe {
+    #[cfg(target_arch="x86_64")]
+    static ref DEBUG_REG_OFFSET: usize = unsafe {
         let x = std::mem::zeroed::<libc::user>();
         (&x.u_debugreg as *const _ as usize) - (&x as *const _ as usize)
     };
@@ -67,20 +68,33 @@ pub struct AttachOptions {
     pub kill_on_exit: bool,
 }
 
+#[derive(Debug)]
 pub struct Watchpoint {
     typ: WatchpointType,
     addr: usize,
     size: WatchSize,
-    on_trap: std::boxed::Box<dyn FnMut(&Self)>,
 }
 
+#[derive(Copy, Clone, Debug)]
 pub enum WatchSize {
     _1 = 0b00,
     _2 = 0b01,
     _4 = 0b11,
     _8 = 0b10,
 }
+impl WatchSize {
+    fn from_usize(size: usize) -> Result<Self, Box<dyn std::error::Error>> {
+        match size {
+            1 => Ok(WatchSize::_1),
+            2 => Ok(WatchSize::_2),
+            4 => Ok(WatchSize::_4),
+            8 => Ok(WatchSize::_8),
+            x => Err(Box::new(WatchpointError::UnsupportedWatchSize(x))),
+        }
+    }
+}
 
+#[derive(Debug)]
 pub enum WatchpointType {
     Execute,
     Write,
@@ -92,6 +106,8 @@ pub enum WatchpointType {
 pub enum WatchpointError {
     NoEmptyWatchpoint,
     DoesNotExist(usize),
+    UnsupportedPlatform,
+    UnsupportedWatchSize(usize),
 }
 
 impl std::fmt::Display for WatchpointError {
@@ -100,6 +116,12 @@ impl std::fmt::Display for WatchpointError {
             WatchpointError::NoEmptyWatchpoint => "No unused hardware options left".to_string(),
             WatchpointError::DoesNotExist(index) => {
                 format!("Watchpoint at specified index ({}) does not exist", index)
+            }
+            WatchpointError::UnsupportedPlatform => {
+                "Watchpoints not supported on this platform".to_string()
+            }
+            WatchpointError::UnsupportedWatchSize(size) => {
+                format!("WatchSize of {} is not supported", size)
             }
         };
         write!(f, "{}", string)
@@ -283,96 +305,161 @@ impl LinuxTarget {
         &mut self,
         watchpoint: Watchpoint,
     ) -> Result<usize, Box<dyn std::error::Error>> {
-        let empty = self.find_empty_watchpoint();
-        if empty.is_none() {
-            return Err(Box::new(WatchpointError::NoEmptyWatchpoint));
+        #[cfg(target_arch = "x86_64")]
+        {
+            let empty = self.find_empty_watchpoint();
+            if empty.is_none() {
+                return Err(Box::new(WatchpointError::NoEmptyWatchpoint));
+            }
+            let index = empty.unwrap();
+
+            let rw_bits: u64 = match watchpoint.typ {
+                WatchpointType::Execute => 0b00,
+                WatchpointType::Read => 0b11,
+                WatchpointType::ReadWrite => 0b11,
+                WatchpointType::Write => 0b01,
+            } << 16 + index * 2;
+
+            let size_bits: u64 = (watchpoint.size as u64) << 18 + index * 2;
+
+            let enable_bit: u64 = 1 << (2 * index);
+
+            let ge_le_bits: u64 = 0b11 << 8;
+
+            let reserved_bit: u64 = 1 << 10;
+
+            let bit_mask: u64 = (0b11 << (2 * index)) | (0b11 << 8) | (1<<10) | (0b1111 << (16 + 4 * index));
+
+            let mut dr7: u64;
+
+            #[allow(deprecated)]
+            unsafe {
+                //Have to use deprecated function because of no alternative for PTRACE_PEEKUSER
+                dr7 = ptrace::ptrace(
+                    ptrace::Request::PTRACE_PEEKUSER,
+                    self.pid,
+                    (*DEBUG_REG_OFFSET + 8*7) as *mut libc::c_void,
+                    0 as *mut libc::c_void,
+                )? as u64;
+            }
+
+            // Check if hardware watchpoint is already used
+            if dr7 & (1 << (2 * index)) != 0 {
+                // Panic for now
+                panic!("Invalid debug register state")
+            }
+
+            println!("{:b}", dr7);
+            dr7 = (dr7 & !bit_mask) | (enable_bit | rw_bits | size_bits | ge_le_bits | reserved_bit);
+            println!("{:b}", dr7);
+
+            let mut addr = watchpoint.addr;
+
+            #[allow(deprecated)]
+            unsafe {
+                //Have to use deprecated function because of no alternative for PTRACE_POKEUSER
+                ptrace::ptrace(
+                    ptrace::Request::PTRACE_POKEUSER,
+                    self.pid,
+                    (*DEBUG_REG_OFFSET + index*8) as *mut libc::c_void,
+                    &mut addr as *mut _ as *mut libc::c_void,
+                )?;
+                ptrace::ptrace(
+                    ptrace::Request::PTRACE_POKEUSER,
+                    self.pid,
+                    (*DEBUG_REG_OFFSET + 7*8) as *mut libc::c_void,
+                    &mut dr7 as *mut _ as *mut libc::c_void,
+                )?;
+            }
+
+            self.watchpoints[index] = Some(watchpoint);
+
+            Ok(index)
         }
-        let index = empty.unwrap();
-
-        let rw_bits: u32 = match watchpoint.typ {
-            WatchpointType::Execute => 0b00,
-            WatchpointType::Read => 0b11,
-            WatchpointType::ReadWrite => 0b11,
-            WatchpointType::Write => 0b01,
-        } << 16 + index * 2;
-
-        let size_bits: u32 = (watchpoint.size as u32) << 18 + index * 2;
-
-        let enable_bit: u32 = 1 << (2 * index);
-
-        let bit_mask: u32 = (0b11 << (2 * index)) | (0b1111 << (16 + 4 * index));
-
-        let mut dr7: u64 = 0;
-
-        unsafe {
-            self.read().read(&mut dr7, *DEBUG_REG + 7 * 4).apply()?;
-        }
-
-        // Check if hardware watchpoint is already used
-        if dr7 & (1 << (2 * index)) != 0 {
-            // Panic for now
-            panic!("Invalid debug register state")
-        }
-
-        dr7 = (dr7 & !(bit_mask as u64)) | (enable_bit | rw_bits | size_bits) as u64;
-
-        // FIXME: Wait for write implementation
-        // Write addr and dr7
-        unimplemented!();
-
-        self.watchpoints[index] = Some(watchpoint);
-
-        Ok(index)
+        #[cfg(not(target_arch = "x86_64"))]
+        Err(Box::new(WatchpointError::UnsupportedPlatform))
     }
 
-    #[cfg(target_arch = "x86_64")]
     pub fn clear_watchpoint(
         &mut self,
         index: usize,
     ) -> Result<Watchpoint, Box<dyn std::error::Error>> {
-        if self.watchpoints[index].is_none() {
-            return Err(Box::new(WatchpointError::DoesNotExist(index)));
-        }
-
-        let mut dr7: u64 = 0;
-        unsafe {
-            self.read().read(&mut dr7, *DEBUG_REG + 7 * 4).apply()?;
-        }
-
-        let bit_mask: u32 = (0b11 << (2 * index)) | (0b1111 << (16 + 4 * index));
-        dr7 = dr7 & !(bit_mask as u64);
-
-        // FIXME: Wait for write implementation
-        // Write addr and dr7
-        unimplemented!();
-
-        let watchpoint = std::mem::replace(&mut self.watchpoints[index], None);
-        Ok(watchpoint.unwrap())
-    }
-
-    #[cfg(target_arch = "x86_64")]
-    pub fn clear_all_watchpoints(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        for index in 0..SUPPORTED_HARDWARE_WATCHPOINTS {
-            match self.watchpoints[index] {
-                Some(_) => {
-                    self.clear_watchpoint(index)?;
-                }
-                None => (),
-            };
-        }
-        Ok(())
-    }
-
-    #[cfg(target_arch = "x86_64")]
-    fn find_empty_watchpoint(&self) -> Option<usize> {
-        let mut empty = None;
-        for i in 0..SUPPORTED_HARDWARE_WATCHPOINTS {
-            if self.watchpoints[i].is_none() {
-                empty = Some(i);
-                break;
+        #[cfg(target_arch = "x86_64")]
+        {
+            if self.watchpoints[index].is_none() {
+                return Err(Box::new(WatchpointError::DoesNotExist(index)));
             }
+
+            let mut dr7: u64;
+            let mut dr6: u64;
+            #[allow(deprecated)]
+            unsafe {
+                //Have to use deprecated function because of no alternative for PTRACE_PEEKUSER
+                dr7 = ptrace::ptrace(
+                    ptrace::Request::PTRACE_PEEKUSER,
+                    self.pid,
+                    (*DEBUG_REG_OFFSET + 7) as *mut libc::c_void,
+                    0 as *mut libc::c_void,
+                )? as u64;
+                dr6 = ptrace::ptrace(
+                    ptrace::Request::PTRACE_PEEKUSER,
+                    self.pid,
+                    (*DEBUG_REG_OFFSET + 6) as *mut libc::c_void,
+                    0 as *mut libc::c_void,
+                )? as u64;
+            }
+
+            let bit_mask: u32 = (0b11 << (2 * index)) | (0b1111 << (16 + 4 * index));
+            dr7 = dr7 & !(bit_mask as u64);
+
+            let bit_mask: u32 = 1 << index;
+            dr6 = dr6 & !(bit_mask as u64);
+
+            #[allow(deprecated)]
+            unsafe {
+                //Have to use deprecated function because of no alternative for PTRACE_POKEUSER
+                ptrace::ptrace(
+                    ptrace::Request::PTRACE_POKEUSER,
+                    self.pid,
+                    (*DEBUG_REG_OFFSET + 7) as *mut libc::c_void,
+                    &mut dr7 as *mut _ as *mut libc::c_void,
+                )?;
+                ptrace::ptrace(
+                    ptrace::Request::PTRACE_POKEUSER,
+                    self.pid,
+                    (*DEBUG_REG_OFFSET + 6) as *mut libc::c_void,
+                    &mut dr6 as *mut _ as *mut libc::c_void,
+                )?;
+            }
+
+            let watchpoint = std::mem::replace(&mut self.watchpoints[index], None);
+            Ok(watchpoint.unwrap())
         }
-        return empty;
+
+        #[cfg(not(target_arch = "x86_64"))]
+        Err(Box::new(WatchpointError::UnsupportedPlatform))
+    }
+
+    pub fn clear_all_watchpoints(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        #[cfg(target_arch = "x86_64")]
+        {
+            for index in 0..SUPPORTED_HARDWARE_WATCHPOINTS {
+                match self.watchpoints[index] {
+                    Some(_) => {
+                        self.clear_watchpoint(index)?;
+                    }
+                    None => (),
+                };
+            }
+            Ok(())
+        }
+
+        #[cfg(not(target_arch = "x86_64"))]
+        Err(Box::new(WatchpointError::UnsupportedPlatform))
+    }
+
+    fn find_empty_watchpoint(&self) -> Option<usize> {
+        self.watchpoints.iter().position(|w| w.is_none())
     }
 }
 
