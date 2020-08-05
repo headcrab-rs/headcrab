@@ -283,7 +283,11 @@ impl Dwarf {
     }
 
     pub fn get_address_symbol_name(&self, addr: usize) -> Option<String> {
-        self.rent(|parsed| Some(parsed.get_address_symbol(addr)?.name()?.to_string()))
+        self.rent(|parsed| Some(parsed.get_address_symbol(addr)?.orig_name()?.to_string()))
+    }
+
+    pub fn get_address_demangled_name(&self, addr: usize) -> Option<String> {
+        self.rent(|parsed| Some(parsed.get_address_symbol(addr)?.name()?))
     }
 
     pub fn get_address_symbol_kind(&self, addr: usize) -> Option<SymbolKind> {
@@ -409,6 +413,18 @@ impl RelocatedDwarf {
             return entry
                 .dwarf
                 .get_address_symbol_name(addr - entry.bias as usize);
+        }
+        None
+    }
+
+    pub fn get_address_demangled_name(&self, addr: usize) -> Option<String> {
+        for entry in &self.0 {
+            if (addr as u64) < entry.address_range.0 || addr as u64 >= entry.address_range.1 {
+                continue;
+            }
+            return entry
+                .dwarf
+                .get_address_demangled_name(addr - entry.bias as usize);
         }
         None
     }

@@ -50,9 +50,9 @@ fn unwind_stack() -> Result<(), Box<dyn std::error::Error>> {
 
     let expected = &[
         "breakpoint",
-        "hello::main::",
-        "std::rt::lang_start::{{closure}}::",
-        "std::rt::lang_start_internal::",
+        "_ZN5hello4main17h",
+        "_ZN3std2rt10lang_start28_$u7b$$u7b$closure$u7d$$u7d$17h",
+        "_ZN3std2rt19lang_start_internal17h",
     ];
 
     test_backtrace(call_stack, expected);
@@ -75,9 +75,9 @@ fn unwind_stack() -> Result<(), Box<dyn std::error::Error>> {
 
     let expected = &[
         "breakpoint",
-        "hello::main::",
-        "std::rt::lang_start::{{closure}}::",
-        "std::rt::lang_start_internal::",
+        "_ZN5hello4main17h",
+        "_ZN3std2rt10lang_start28_$u7b$$u7b$closure$u7d$$u7d$17h",
+        "_ZN3std2rt19lang_start_internal17h",
     ];
 
     test_backtrace(call_stack, expected);
