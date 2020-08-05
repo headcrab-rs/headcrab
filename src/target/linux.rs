@@ -939,4 +939,37 @@ mod tests {
         t1_handle.join().unwrap();
         Ok(())
     }
+
+    #[test]
+    fn watchpoint_set() -> Result<(), Box<dyn std::error::Error>> {
+        let mut var: u8 = 124;
+
+        match fork() {
+            Ok(ForkResult::Child) => {
+                use std::{thread, time};
+                thread::sleep(time::Duration::from_millis(100));
+
+                var = 145;
+                
+                thread::sleep(time::Duration::from_millis(100));
+            }
+            Ok(ForkResult::Parent { child, .. }) => {
+                let (mut target, _wait_status) =
+                    LinuxTarget::attach(child, AttachOptions { kill_on_exit: true })
+                        .expect("Couldn't attach to child");
+
+                target.set_watchpoint(Watchpoint {
+                    addr: &var as *const _ as usize,
+                    typ: WatchpointType::Write,
+                    size: WatchSize::from_usize(std::mem::size_of::<u8>())?,
+                })?;
+
+                ptrace::cont(child, Some(signal::Signal::SIGCONT)).unwrap();
+                wait::waitpid(child, None)?;
+            }
+            Err(x) => panic!(x),
+        }
+
+        Ok(())
+    }
 }
