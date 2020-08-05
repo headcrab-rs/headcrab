@@ -4,6 +4,7 @@ use nix::{
     unistd::{execv, fork, ForkResult, Pid},
 };
 use std::ffi::CString;
+use std::process;
 
 /// This trait defines the common behavior for all *nix targets
 pub trait UnixTarget {
@@ -40,7 +41,7 @@ pub trait UnixTarget {
 
 /// Launch a new debuggee process.
 pub(in crate::target) fn launch(
-    path: &str,
+    path: CString,
 ) -> Result<(Pid, WaitStatus), Box<dyn std::error::Error>> {
     // We start the debuggee by forking the parent process.
     // The child process invokes `ptrace(2)` with the `PTRACE_TRACEME` parameter to enable debugging features for the parent.
@@ -52,7 +53,10 @@ pub(in crate::target) fn launch(
             Ok((child, status))
         }
         ForkResult::Child => {
-            ptrace::traceme()?;
+            if let Err(err) = ptrace::traceme() {
+                println!("ptrace traceme failed: {:?}", err);
+                process::abort()
+            }
 
             // Disable ASLR
             #[cfg(target_os = "linux")]
@@ -61,11 +65,14 @@ pub(in crate::target) fn launch(
                 libc::personality(ADDR_NO_RANDOMIZE);
             }
 
-            let path = CString::new(path)?;
-            execv(&path, &[path.as_ref()])?;
+            if let Err(err) = execv(&path, &[path.as_ref()]) {
+                println!("execv failed: {:?}", err);
+                process::abort();
+            }
 
             // execv replaces the process image, so this place in code will not be reached.
-            unreachable!();
+            println!("Unreachable code reached");
+            process::abort();
         }
     }
 }

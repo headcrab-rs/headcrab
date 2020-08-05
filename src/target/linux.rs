@@ -5,6 +5,7 @@ use nix::unistd::{getpid, Pid};
 use procfs::process::{Process, Task};
 use procfs::ProcError;
 use std::{
+    ffi::CString,
     fs::File,
     io::{BufRead, BufReader},
     marker::PhantomData,
@@ -68,7 +69,7 @@ impl LinuxTarget {
     pub fn launch(
         path: &str,
     ) -> Result<(LinuxTarget, nix::sys::wait::WaitStatus), Box<dyn std::error::Error>> {
-        let (pid, status) = unix::launch(path)?;
+        let (pid, status) = unix::launch(CString::new(path)?)?;
         let target = LinuxTarget { pid };
         target.kill_on_exit()?;
         Ok((target, status))
