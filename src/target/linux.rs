@@ -70,9 +70,9 @@ pub struct AttachOptions {
 
 #[derive(Debug)]
 pub struct Watchpoint {
-    typ: WatchpointType,
-    addr: usize,
-    size: WatchSize,
+    pub typ: WatchpointType,
+    pub addr: usize,
+    pub size: WatchSize,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -328,7 +328,8 @@ impl LinuxTarget {
 
             let reserved_bit: u64 = 1 << 10;
 
-            let bit_mask: u64 = (0b11 << (2 * index)) | (0b11 << 8) | (1<<10) | (0b1111 << (16 + 4 * index));
+            let bit_mask: u64 =
+                (0b11 << (2 * index)) | (0b11 << 8) | (1 << 10) | (0b1111 << (16 + 4 * index));
 
             let mut dr7: u64;
 
@@ -338,7 +339,7 @@ impl LinuxTarget {
                 dr7 = ptrace::ptrace(
                     ptrace::Request::PTRACE_PEEKUSER,
                     self.pid,
-                    (*DEBUG_REG_OFFSET + 8*7) as *mut libc::c_void,
+                    (*DEBUG_REG_OFFSET + 8 * 7) as *mut libc::c_void,
                     0 as *mut libc::c_void,
                 )? as u64;
             }
@@ -350,7 +351,8 @@ impl LinuxTarget {
             }
 
             println!("{:b}", dr7);
-            dr7 = (dr7 & !bit_mask) | (enable_bit | rw_bits | size_bits | ge_le_bits | reserved_bit);
+            dr7 =
+                (dr7 & !bit_mask) | (enable_bit | rw_bits | size_bits | ge_le_bits | reserved_bit);
             println!("{:b}", dr7);
 
             let mut addr = watchpoint.addr;
@@ -361,13 +363,13 @@ impl LinuxTarget {
                 ptrace::ptrace(
                     ptrace::Request::PTRACE_POKEUSER,
                     self.pid,
-                    (*DEBUG_REG_OFFSET + index*8) as *mut libc::c_void,
+                    (*DEBUG_REG_OFFSET + index * 8) as *mut libc::c_void,
                     &mut addr as *mut _ as *mut libc::c_void,
                 )?;
                 ptrace::ptrace(
                     ptrace::Request::PTRACE_POKEUSER,
                     self.pid,
-                    (*DEBUG_REG_OFFSET + 7*8) as *mut libc::c_void,
+                    (*DEBUG_REG_OFFSET + 7 * 8) as *mut libc::c_void,
                     &mut dr7 as *mut _ as *mut libc::c_void,
                 )?;
             }
@@ -937,39 +939,6 @@ mod tests {
 
         end_barrier.wait();
         t1_handle.join().unwrap();
-        Ok(())
-    }
-
-    #[test]
-    fn watchpoint_set() -> Result<(), Box<dyn std::error::Error>> {
-        let mut var: u8 = 124;
-
-        match fork() {
-            Ok(ForkResult::Child) => {
-                use std::{thread, time};
-                thread::sleep(time::Duration::from_millis(100));
-
-                var = 145;
-                
-                thread::sleep(time::Duration::from_millis(100));
-            }
-            Ok(ForkResult::Parent { child, .. }) => {
-                let (mut target, _wait_status) =
-                    LinuxTarget::attach(child, AttachOptions { kill_on_exit: true })
-                        .expect("Couldn't attach to child");
-
-                target.set_watchpoint(Watchpoint {
-                    addr: &var as *const _ as usize,
-                    typ: WatchpointType::Write,
-                    size: WatchSize::from_usize(std::mem::size_of::<u8>())?,
-                })?;
-
-                ptrace::cont(child, Some(signal::Signal::SIGCONT)).unwrap();
-                wait::waitpid(child, None)?;
-            }
-            Err(x) => panic!(x),
-        }
-
         Ok(())
     }
 }
