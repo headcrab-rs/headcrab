@@ -1,8 +1,9 @@
 //! Implementation of a symbol table entry that will automatically
 //! demangle rustc names.
 
+use addr2line::demangle_auto;
 use object::{SectionIndex, SymbolFlags, SymbolKind, SymbolScope, SymbolSection};
-use rustc_demangle::demangle;
+use std::borrow::Cow;
 
 /// A symbol table entry.
 #[derive(Clone, Debug)]
@@ -15,7 +16,8 @@ impl<'data> Symbol<'data> {
     #[inline]
     pub fn name(&self) -> Option<String> {
         // TODO: Avoid this allocation in every call. (lifetime errors)
-        self.orig_name().map(|name| demangle(name).to_string())
+        self.orig_name()
+            .map(|name| demangle_auto(Cow::Borrowed(name), None).to_string())
     }
 
     /// Returns the unmangled name of this symbol.
