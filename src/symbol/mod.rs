@@ -1,11 +1,12 @@
 //! This module provides a naive implementation of symbolication for the time being.
 //! It should be expanded to support multiple data sources.
 
+mod sym;
 pub mod unwind;
 
 use gimli::read::{EvaluationResult, Reader as _};
 use object::{
-    read::{Object, ObjectSection, ObjectSegment, Symbol},
+    read::{Object, ObjectSection, ObjectSegment},
     SymbolKind,
 };
 use std::{
@@ -15,6 +16,7 @@ use std::{
     path::Path,
     rc::Rc,
 };
+pub use sym::Symbol;
 
 mod source;
 
@@ -157,8 +159,9 @@ impl<'a> ParsedDwarf<'a> {
                 }
                 !symbol.is_undefined() && symbol.section() != object::SymbolSection::Common
             })
+            .map(Into::into)
             .collect();
-        symbols.sort_by_key(|sym| sym.address());
+        symbols.sort_by_key(|sym: &Symbol| sym.address());
 
         let mut symbol_names = HashMap::new();
         for sym in &symbols {
@@ -180,7 +183,7 @@ impl<'a> ParsedDwarf<'a> {
         self.symbol_names.get(name).copied()
     }
 
-    pub fn get_address_symbol(&self, addr: usize) -> Option<object::Symbol> {
+    pub fn get_address_symbol(&self, addr: usize) -> Option<Symbol<'a>> {
         let index = match self
             .symbols
             .binary_search_by(|sym| sym.address().cmp(&(addr as u64)))
