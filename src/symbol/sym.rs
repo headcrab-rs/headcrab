@@ -14,16 +14,10 @@ pub struct Symbol<'data> {
 impl<'data> Symbol<'data> {
     /// Returns the demangled name if this symbol has a name.
     #[inline]
-    pub fn name(&self) -> Option<String> {
+    pub fn demangled_name(&self) -> Option<String> {
         // TODO: Avoid this allocation in every call. (lifetime errors)
-        self.orig_name()
+        self.name()
             .map(|name| demangle_auto(Cow::Borrowed(name), None).to_string())
-    }
-
-    /// Returns the unmangled name of this symbol.
-    #[inline]
-    pub fn orig_name(&self) -> Option<&'data str> {
-        self.symbol.name()
     }
 }
 
