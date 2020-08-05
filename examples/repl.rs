@@ -227,7 +227,7 @@ mod example {
                         func,
                         context
                             .debuginfo()
-                            .get_address_symbol_name(func)
+                            .get_address_demangled_name(func)
                             .as_deref()
                             .unwrap_or("<unknown>")
                     );

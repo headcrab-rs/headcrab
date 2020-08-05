@@ -165,7 +165,7 @@ impl<'a> ParsedDwarf<'a> {
 
         let mut symbol_names = HashMap::new();
         for sym in &symbols {
-            if let Some(name) = sym.name() {
+            if let Some(name) = sym.demangled_name() {
                 symbol_names.insert(name.to_string(), sym.address() as usize);
             }
         }
@@ -287,7 +287,14 @@ impl Dwarf {
     }
 
     pub fn get_address_demangled_name(&self, addr: usize) -> Option<String> {
-        self.rent(|parsed| Some(parsed.get_address_symbol(addr)?.demangled_name()?))
+        self.rent(|parsed| {
+            Some(
+                parsed
+                    .get_address_symbol(addr)?
+                    .demangled_name()?
+                    .to_string(),
+            )
+        })
     }
 
     pub fn get_address_symbol_kind(&self, addr: usize) -> Option<SymbolKind> {
