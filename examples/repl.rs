@@ -222,15 +222,54 @@ mod example {
                     Some(sub) => Err(format!("Unknown `bt` subcommand `{}`", sub))?,
                 };
                 for func in call_stack {
-                    println!(
-                        "{:016x} {}",
+                    let res = context.debuginfo().with_addr_frames(
                         func,
-                        context
-                            .debuginfo()
-                            .get_address_demangled_name(func)
-                            .as_deref()
-                            .unwrap_or("<unknown>")
-                    );
+                        |mut frames: addr2line::FrameIter<_>| {
+                            let mut first_frame = true;
+                            while let Some(frame) = frames.next()? {
+                                let name = frame
+                                    .function
+                                    .map(|f| Ok(f.demangle()?.into_owned()))
+                                    .transpose()
+                                    .map_err(|err: gimli::Error| err)?
+                                    .unwrap_or_else(|| "<unknown>".to_string());
+
+                                let location = frame
+                                    .location
+                                    .map(|loc| {
+                                        format!(
+                                            "{}:{}",
+                                            loc.file.unwrap_or("<unknown file>"),
+                                            loc.line.unwrap_or(0),
+                                        )
+                                    })
+                                    .unwrap_or_default();
+
+                                if first_frame {
+                                    println!("{:016x} {} {}", func, name, location);
+                                } else {
+                                    println!("                 {} {}", name, location);
+                                }
+
+                                first_frame = false;
+                            }
+                            Ok(first_frame)
+                        },
+                    )?;
+                    match res {
+                        Some(true) | None => {
+                            println!(
+                                "{:016x} at {}",
+                                func,
+                                context
+                                    .debuginfo()
+                                    .get_address_demangled_name(func)
+                                    .as_deref()
+                                    .unwrap_or("<unknown>")
+                            );
+                        }
+                        Some(false) => {}
+                    }
                 }
             }
             Some("dis") | Some("disassemble") => {

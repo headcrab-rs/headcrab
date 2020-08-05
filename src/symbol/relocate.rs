@@ -193,4 +193,25 @@ impl RelocatedDwarf {
         }
         Ok(None)
     }
+
+    pub fn with_addr_frames<
+        T,
+        F: for<'a> FnOnce(addr2line::FrameIter<Reader<'a>>) -> Result<T, Box<dyn std::error::Error>>,
+    >(
+        &self,
+        addr: usize,
+        f: F,
+    ) -> Result<Option<T>, Box<dyn std::error::Error>> {
+        for entry in &self.0 {
+            if (addr as u64) < entry.address_range.0 || addr as u64 >= entry.address_range.1 {
+                continue;
+            }
+            return Ok(Some(
+                entry
+                    .dwarf
+                    .with_addr_frames(addr - entry.bias as usize, f)?,
+            ));
+        }
+        Ok(None)
+    }
 }

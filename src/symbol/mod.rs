@@ -14,7 +14,6 @@ use std::{
     collections::{BTreeMap, HashMap},
     fs::File,
     path::Path,
-    rc::Rc,
 };
 pub use sym::Symbol;
 
@@ -39,11 +38,18 @@ macro_rules! dwarf_attr_or_continue {
     };
 }
 
-#[derive(Debug)]
-enum RcCow<'a, T: ?Sized> {
-    Owned(Rc<T>),
-    Borrowed(&'a T),
+mod rc_cow {
+    use std::rc::Rc;
+
+    // Avoid private-in-public error by making this public.
+    #[derive(Debug)]
+    pub enum RcCow<'a, T: ?Sized> {
+        Owned(Rc<T>),
+        Borrowed(&'a T),
+    }
 }
+
+use rc_cow::RcCow;
 
 impl<T: ?Sized> Clone for RcCow<'_, T> {
     fn clone(&self) -> Self {
@@ -230,6 +236,13 @@ impl<'a> ParsedDwarf<'a> {
         }
         Ok(None)
     }
+
+    pub fn get_addr_frames(
+        &self,
+        addr: usize,
+    ) -> Result<addr2line::FrameIter<Reader<'a>>, Box<dyn std::error::Error>> {
+        self.addr2line.find_frames(addr as u64).map_err(Into::into)
+    }
 }
 
 mod inner {
@@ -314,5 +327,16 @@ impl Dwarf {
 
     pub fn get_var_address(&self, name: &str) -> Result<Option<usize>, Box<dyn std::error::Error>> {
         self.rent(|parsed| parsed.get_var_address(name))
+    }
+
+    pub fn with_addr_frames<
+        T,
+        F: for<'a> FnOnce(addr2line::FrameIter<Reader<'a>>) -> Result<T, Box<dyn std::error::Error>>,
+    >(
+        &self,
+        addr: usize,
+        f: F,
+    ) -> Result<T, Box<dyn std::error::Error>> {
+        self.rent(|parsed| f(parsed.get_addr_frames(addr)?))
     }
 }
