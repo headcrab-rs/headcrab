@@ -3,26 +3,19 @@
 
 use object::{SectionIndex, SymbolFlags, SymbolKind, SymbolScope, SymbolSection};
 use rustc_demangle::demangle;
-use std::cell::Cell;
 
 /// A symbol table entry.
 #[derive(Clone, Debug)]
 pub struct Symbol<'data> {
-    demangled_name: Cell<Option<&'data str>>,
     symbol: object::Symbol<'data>,
 }
 
 impl<'data> Symbol<'data> {
     /// Returns the demangled name if this symbol has a name.
-    pub fn name(&self) -> Option<&'data str> {
-        let mangled_name = self.symbol.name()?;
-        if let Some(name) = self.demangled_name.get() {
-            Some(name)
-        } else {
-            let demangled = demangle(mangled_name).as_str();
-            self.demangled_name.set(Some(demangled));
-            Some(demangled)
-        }
+    #[inline]
+    pub fn name(&self) -> Option<String> {
+        // TODO: Avoid this allocation in every call. (lifetime errors)
+        self.orig_name().map(|name| demangle(name).to_string())
     }
 
     /// Returns the unmangled name of this symbol.
@@ -104,9 +97,6 @@ impl<'data> Symbol<'data> {
 
 impl<'data> From<object::Symbol<'data>> for Symbol<'data> {
     fn from(symbol: object::Symbol<'data>) -> Self {
-        Symbol {
-            demangled_name: Cell::new(None),
-            symbol,
-        }
+        Symbol { symbol }
     }
 }

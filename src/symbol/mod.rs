@@ -73,7 +73,7 @@ pub struct ParsedDwarf<'a> {
     addr2line: addr2line::Context<Reader<'a>>,
     vars: BTreeMap<String, usize>,
     symbols: Vec<Symbol<'a>>,
-    symbol_names: HashMap<&'a str, usize>,
+    symbol_names: HashMap<String, usize>,
 }
 
 impl<'a> ParsedDwarf<'a> {
