@@ -1,11 +1,12 @@
 //! This module provides a naive implementation of symbolication for the time being.
 //! It should be expanded to support multiple data sources.
 
+mod sym;
 pub mod unwind;
 
 use gimli::read::{EvaluationResult, Reader as _};
 use object::{
-    read::{Object, ObjectSection, ObjectSegment, Symbol},
+    read::{Object, ObjectSection, ObjectSegment},
     SymbolKind,
 };
 use std::{
@@ -15,6 +16,7 @@ use std::{
     path::Path,
     rc::Rc,
 };
+pub use sym::Symbol;
 
 mod source;
 
@@ -71,7 +73,7 @@ pub struct ParsedDwarf<'a> {
     addr2line: addr2line::Context<Reader<'a>>,
     vars: BTreeMap<String, usize>,
     symbols: Vec<Symbol<'a>>,
-    symbol_names: HashMap<&'a str, usize>,
+    symbol_names: HashMap<String, usize>,
 }
 
 impl<'a> ParsedDwarf<'a> {
@@ -157,13 +159,14 @@ impl<'a> ParsedDwarf<'a> {
                 }
                 !symbol.is_undefined() && symbol.section() != object::SymbolSection::Common
             })
+            .map(Into::into)
             .collect();
-        symbols.sort_by_key(|sym| sym.address());
+        symbols.sort_by_key(|sym: &Symbol| sym.address());
 
         let mut symbol_names = HashMap::new();
         for sym in &symbols {
-            if let Some(name) = sym.name() {
-                symbol_names.insert(name, sym.address() as usize);
+            if let Some(name) = sym.demangled_name() {
+                symbol_names.insert(name.to_string(), sym.address() as usize);
             }
         }
 
@@ -180,7 +183,7 @@ impl<'a> ParsedDwarf<'a> {
         self.symbol_names.get(name).copied()
     }
 
-    pub fn get_address_symbol(&self, addr: usize) -> Option<object::Symbol> {
+    pub fn get_address_symbol(&self, addr: usize) -> Option<Symbol<'a>> {
         let index = match self
             .symbols
             .binary_search_by(|sym| sym.address().cmp(&(addr as u64)))
@@ -281,6 +284,17 @@ impl Dwarf {
 
     pub fn get_address_symbol_name(&self, addr: usize) -> Option<String> {
         self.rent(|parsed| Some(parsed.get_address_symbol(addr)?.name()?.to_string()))
+    }
+
+    pub fn get_address_demangled_name(&self, addr: usize) -> Option<String> {
+        self.rent(|parsed| {
+            Some(
+                parsed
+                    .get_address_symbol(addr)?
+                    .demangled_name()?
+                    .to_string(),
+            )
+        })
     }
 
     pub fn get_address_symbol_kind(&self, addr: usize) -> Option<SymbolKind> {
@@ -406,6 +420,18 @@ impl RelocatedDwarf {
             return entry
                 .dwarf
                 .get_address_symbol_name(addr - entry.bias as usize);
+        }
+        None
+    }
+
+    pub fn get_address_demangled_name(&self, addr: usize) -> Option<String> {
+        for entry in &self.0 {
+            if (addr as u64) < entry.address_range.0 || addr as u64 >= entry.address_range.1 {
+                continue;
+            }
+            return entry
+                .dwarf
+                .get_address_demangled_name(addr - entry.bias as usize);
         }
         None
     }
