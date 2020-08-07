@@ -42,15 +42,6 @@ impl Target {
         {
             return Err(Box::new(std::io::Error::last_os_error()));
         }
-        // Initialize the SymbolHandler
-        unsafe {
-            dbghelp::SymSetOptions(
-                dbghelp::SymGetOptions() | dbghelp::SYMOPT_DEBUG | dbghelp::SYMOPT_LOAD_LINES,
-            )
-        };
-        if unsafe { dbghelp::SymInitializeW(pi.hProcess, ptr::null(), FALSE) } == FALSE {
-            return Err(Box::new(std::io::Error::last_os_error()));
-        }
 
         Ok(Target { proc_info: pi })
     }
