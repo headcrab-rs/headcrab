@@ -381,17 +381,16 @@ impl LinuxTarget {
                 return Err(Box::new(HardwareBreakpointError::DoesNotExist(index)));
             }
 
-            let mut dr7: u64;
-            let mut dr6: u64;
+            let mut dr7 =
+                self.ptrace_peekuser((*DEBUG_REG_OFFSET + 7 * 8) as *mut libc::c_void)? as u64;
+            let mut dr6 =
+                self.ptrace_peekuser((*DEBUG_REG_OFFSET + 6 * 8) as *mut libc::c_void)? as u64;
 
-            dr7 = self.ptrace_peekuser((*DEBUG_REG_OFFSET + 7 * 8) as *mut libc::c_void)? as u64;
-            dr6 = self.ptrace_peekuser((*DEBUG_REG_OFFSET + 6 * 8) as *mut libc::c_void)? as u64;
+            let dr7_bit_mask: u32 = (0b11 << (2 * index)) | (0b1111 << (16 + 4 * index));
+            dr7 = dr7 & !(dr7_bit_mask as u64);
 
-            let bit_mask: u32 = (0b11 << (2 * index)) | (0b1111 << (16 + 4 * index));
-            dr7 = dr7 & !(bit_mask as u64);
-
-            let bit_mask: u32 = 1 << index;
-            dr6 = dr6 & !(bit_mask as u64);
+            let dr6_bit_mask: u32 = 1 << index;
+            dr6 = dr6 & !(dr6_bit_mask as u64);
 
             #[allow(deprecated)]
             unsafe {
