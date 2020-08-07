@@ -3,7 +3,7 @@ use super::{
     LinuxTarget, PAGE_SIZE,
 };
 use nix::sys::ptrace;
-use std::{marker::PhantomData, mem};
+use std::{cmp, marker::PhantomData, mem};
 
 /// Allows to read memory from different locations in debuggee's memory as a single operation.
 pub struct ReadMemory<'a> {
@@ -35,15 +35,14 @@ impl<'a> ReadMemory<'a> {
     /// In case of doubt, wrap the type in [`mem::MaybeUninit`].
     // todo: further document mem safety - e.g., what happens in the case of partial read
     pub unsafe fn read<T>(mut self, val: &'a mut T, remote_base: usize) -> Self {
-        self.read_ops.append(
-            &mut ReadOp {
+        ReadOp::split_on_page_boundary(
+            &ReadOp {
                 remote_base,
                 len: mem::size_of::<T>(),
                 local_ptr: val as *mut T as *mut libc::c_void,
-            }
-            .split_on_page_boundary(),
+            },
+            &mut self.read_ops,
         );
-
         self
     }
 
@@ -59,15 +58,14 @@ impl<'a> ReadMemory<'a> {
     /// You need to ensure the lifetime guarantees, and generally you should prefer using `read<T>(&mut val)`.
     // todo: further document mem safety - e.g., what happens in the case of partial read
     pub unsafe fn read_ptr<T>(mut self, ptr: *mut T, remote_base: usize) -> Self {
-        self.read_ops.append(
-            &mut ReadOp {
+        ReadOp::split_on_page_boundary(
+            &ReadOp {
                 remote_base,
                 len: mem::size_of::<T>(),
                 local_ptr: ptr as *mut _,
-            }
-            .split_on_page_boundary(),
+            },
+            &mut self.read_ops,
         );
-
         self
     }
 
@@ -84,15 +82,29 @@ impl<'a> ReadMemory<'a> {
     /// In case of doubt, wrap the type in [`mem::MaybeUninit`].
     // todo: further document mem safety - e.g., what happens in the case of partial read
     pub unsafe fn read_slice<T>(mut self, val: &'a mut [T], remote_base: usize) -> Self {
-        self.read_ops.append(
-            &mut ReadOp {
+        ReadOp::split_on_page_boundary(
+            &ReadOp {
                 remote_base,
                 len: val.len() * mem::size_of::<T>(),
                 local_ptr: val.as_mut_ptr() as *mut _,
-            }
-            .split_on_page_boundary(),
+            },
+            &mut self.read_ops,
         );
+        self
+    }
 
+    /// Reads a `u8` byte slice from debuggee's memory at location `remote_base`.
+    /// This value will be written to the provided slice `val`.
+    /// You should call `apply` in order to execute the memory read operation.
+    pub fn read_byte_slice<T>(mut self, val: &'a mut [u8], remote_base: usize) -> Self {
+        ReadOp::split_on_page_boundary(
+            &ReadOp {
+                remote_base,
+                len: val.len(),
+                local_ptr: val.as_mut_ptr() as *mut _,
+            },
+            &mut self.read_ops,
+        );
         self
     }
 
@@ -238,14 +250,12 @@ impl ReadOp {
     }
 
     /// Splits ReadOp so that each resulting ReadOp resides in only one memory page.
-    fn split_on_page_boundary(&self) -> Vec<ReadOp> {
-        let mut out = Vec::new();
-
+    fn split_on_page_boundary(&self, out: &mut Vec<ReadOp>) {
         // Number of bytes left to be read
         let mut left = self.len;
 
         let next_page_distance = *PAGE_SIZE - ((*PAGE_SIZE - 1) & self.remote_base);
-        let to_next_read_op = std::cmp::min(left, next_page_distance);
+        let to_next_read_op = cmp::min(left, next_page_distance);
         // Read from remote_base to the end or to the next page
         out.push(ReadOp {
             remote_base: self.remote_base,
@@ -273,6 +283,5 @@ impl ReadOp {
                 left -= *PAGE_SIZE;
             }
         }
-        out
     }
 }
