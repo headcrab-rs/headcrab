@@ -6,7 +6,7 @@ use winapi::um::processthreadsapi::{
 use winapi::um::winbase;
 use winapi::um::winnt;
 
-/// This structure holds the state of the debuggee on windows systems
+/// This structure holds the state of the debuggee on windows systems.
 pub struct Target {
     process_handle: winnt::HANDLE,
 }
@@ -21,7 +21,7 @@ macro_rules! wide_string {
 }
 
 impl Target {
-    /// Launch a new debuggee process
+    /// Launch a new debuggee process.
     pub fn launch(path: &str) -> Result<Target, Box<dyn std::error::Error>> {
         let mut si: STARTUPINFOW = unsafe { mem::zeroed() };
         let mut pi: PROCESS_INFORMATION = unsafe { mem::zeroed() };
@@ -49,7 +49,7 @@ impl Target {
         })
     }
 
-    /// Attach to a running Process
+    /// Attach to a running Process.
     pub fn attach(pid: u32) -> Result<Target, Box<dyn std::error::Error>> {
         let access = winnt::PROCESS_VM_OPERATION | winnt::PROCESS_VM_READ | winnt::PROCESS_VM_WRITE;
         let process_handle = unsafe { OpenProcess(access, FALSE, pid) };
