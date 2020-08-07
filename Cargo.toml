@@ -28,7 +28,6 @@ libc = "0.2.72"
 # Dependencies specific to macOS
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
 mach = "0.3"
-
 security-framework-sys = "1.0"
 
 # Dependencies specific to Linux
