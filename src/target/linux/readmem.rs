@@ -2,7 +2,7 @@ use super::{
     memory::{split_protected, MemoryOp},
     LinuxTarget, PAGE_SIZE,
 };
-use nix::sys::ptrace;
+use nix::{sys::ptrace, unistd::Pid};
 use std::{cmp, marker::PhantomData, mem};
 
 /// Allows to read memory from different locations in debuggee's memory as a single operation.
@@ -110,6 +110,7 @@ impl<'a> ReadMemory<'a> {
 
     /// Executes the memory read operation.
     pub fn apply(self) -> Result<(), Box<dyn std::error::Error>> {
+        let pid = self.target.pid;
         let read_len = self
             .read_ops
             .iter()
@@ -120,7 +121,7 @@ impl<'a> ReadMemory<'a> {
         };
 
         // FIXME: Probably a better way to do this
-        let result = self.read_process_vm(&self.read_ops);
+        let result = Self::read_process_vm(pid, &self.read_ops);
 
         if result.is_err() && result.unwrap_err() == nix::Error::Sys(nix::errno::Errno::EFAULT)
             || result.is_ok() && result.unwrap() != read_len as isize
@@ -133,17 +134,17 @@ impl<'a> ReadMemory<'a> {
                 .collect::<Vec<_>>();
 
             let (protected, readable) =
-                split_protected(&protected_maps, self.read_ops.iter().cloned())?;
+                split_protected(&protected_maps, self.read_ops.into_iter())?;
 
-            self.read_process_vm(&readable)?;
-            self.read_ptrace(&protected)?;
+            Self::read_process_vm(pid, &readable)?;
+            Self::read_ptrace(pid, &protected)?;
         }
         Ok(())
     }
 
     /// Allows to read from several different locations with one system call.
     /// It will error on pages that are not readable. Returns number of bytes read at granularity of ReadOps.
-    fn read_process_vm(&self, read_ops: &[ReadOp]) -> Result<isize, nix::Error> {
+    fn read_process_vm(pid: Pid, read_ops: &[ReadOp]) -> Result<isize, nix::Error> {
         let remote_iov = read_ops
             .iter()
             .map(|read_op| read_op.as_remote_iovec())
@@ -157,7 +158,7 @@ impl<'a> ReadMemory<'a> {
         let bytes_read = unsafe {
             // todo: document unsafety
             libc::process_vm_readv(
-                self.target.pid.into(),
+                pid.into(),
                 local_iov.as_ptr(),
                 local_iov.len() as libc::c_ulong,
                 remote_iov.as_ptr(),
@@ -175,17 +176,15 @@ impl<'a> ReadMemory<'a> {
 
     /// Allows to read from protected memory pages.
     /// This operation results in multiple system calls and is inefficient.
-    fn read_ptrace(&self, read_ops: &[ReadOp]) -> Result<(), Box<dyn std::error::Error>> {
+    fn read_ptrace(pid: Pid, read_ops: &[ReadOp]) -> Result<(), Box<dyn std::error::Error>> {
         let long_size = std::mem::size_of::<std::os::raw::c_long>();
 
         for read_op in read_ops {
             let mut offset: usize = 0;
             // Read until all of the data is read
             while offset < read_op.len {
-                let data = ptrace::read(
-                    self.target.pid,
-                    (read_op.remote_base + offset) as *mut std::ffi::c_void,
-                )?;
+                let data =
+                    ptrace::read(pid, (read_op.remote_base + offset) as *mut std::ffi::c_void)?;
 
                 // Read full word. No need to preserve other data
                 if (read_op.len - offset) >= long_size {
