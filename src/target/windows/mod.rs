@@ -1,13 +1,14 @@
 use std::mem;
-use std::ptr;
 use winapi::shared::minwindef::FALSE;
-use winapi::um::dbghelp;
-use winapi::um::processthreadsapi::{CreateProcessW, PROCESS_INFORMATION, STARTUPINFOW};
+use winapi::um::processthreadsapi::{
+    CreateProcessW, OpenProcess, PROCESS_INFORMATION, STARTUPINFOW,
+};
 use winapi::um::winbase;
+use winapi::um::winnt;
 
 /// This structure holds the state of the debuggee on windows systems
 pub struct Target {
-    proc_info: PROCESS_INFORMATION,
+    process_handle: winnt::HANDLE,
 }
 
 macro_rules! wide_string {
@@ -43,6 +44,18 @@ impl Target {
             return Err(Box::new(std::io::Error::last_os_error()));
         }
 
-        Ok(Target { proc_info: pi })
+        Ok(Target {
+            process_handle: pi.hProcess,
+        })
+    }
+
+    /// Attach to a running Process
+    pub fn attach(pid: u32) -> Result<Target, Box<dyn std::error::Error>> {
+        let access = winnt::PROCESS_VM_OPERATION | winnt::PROCESS_VM_READ | winnt::PROCESS_VM_WRITE;
+        let process_handle = unsafe { OpenProcess(access, FALSE, pid) };
+        if process_handle == std::ptr::null_mut() {
+            return Err(Box::new(std::io::Error::last_os_error()));
+        }
+        Ok(Target { process_handle })
     }
 }
