@@ -129,7 +129,7 @@ impl<'a> ReadMemory<'a> {
     }
 
     /// Allows to read from several different locations with one system call.
-    /// It will ignore pages that are not readable. Returns number of bytes read at granularity of ReadOps.
+    /// It will error on pages that are not readable. Returns number of bytes read at granularity of ReadOps.
     fn read_process_vm(&self, read_ops: &[ReadOp]) -> Result<isize, nix::Error> {
         let remote_iov = read_ops
             .iter()
