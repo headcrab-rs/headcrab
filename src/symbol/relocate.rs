@@ -196,7 +196,7 @@ impl RelocatedDwarf {
 
     pub fn with_addr_frames<
         T,
-        F: for<'a> FnOnce(addr2line::FrameIter<Reader<'a>>) -> Result<T, Box<dyn std::error::Error>>,
+        F: for<'a> FnOnce(usize, FrameIter<'a>) -> Result<T, Box<dyn std::error::Error>>,
     >(
         &self,
         addr: usize,

@@ -1,7 +1,7 @@
 //! This module provides a naive implementation of symbolication for the time being.
 //! It should be expanded to support multiple data sources.
 
-mod sym;
+pub mod dwarf_utils;
 pub mod unwind;
 
 use gimli::read::{EvaluationResult, Reader as _};
@@ -17,9 +17,12 @@ use std::{
 };
 pub use sym::Symbol;
 
+mod frame;
 mod relocate;
 mod source;
+mod sym;
 
+pub use frame::{Frame, FrameIter};
 pub use relocate::RelocatedDwarf;
 pub use source::DisassemblySource;
 
@@ -238,10 +241,14 @@ impl<'a> ParsedDwarf<'a> {
     }
 
     pub fn get_addr_frames(
-        &self,
+        &'a self,
         addr: usize,
-    ) -> Result<addr2line::FrameIter<Reader<'a>>, Box<dyn std::error::Error>> {
-        self.addr2line.find_frames(addr as u64).map_err(Into::into)
+    ) -> Result<FrameIter<'a>, Box<dyn std::error::Error>> {
+        Ok(FrameIter {
+            dwarf: self.addr2line.dwarf(),
+            unit: self.addr2line.find_dwarf_unit(addr as u64),
+            iter: self.addr2line.find_frames(addr as u64)?,
+        })
     }
 }
 
@@ -285,8 +292,12 @@ mod inner {
             })
         }
 
-        pub fn rent<T>(&self, f: impl for<'a> FnOnce(&ParsedDwarf<'a>) -> T) -> T {
-            f(&*self.parsed)
+        pub fn rent<T>(&self, f: impl for<'a> FnOnce(&'a ParsedDwarf<'a>) -> T) -> T {
+            // Safety: `ParsedDwarf` is invariant in `'a`. This means that `ParsedDwarf<'static>`
+            // can't safely turn into `ParsedDwarf<'a>`, as otherwise it would be possible to put a
+            // short living reference into `ParsedDwarf`. However because of the `for<'a>` on
+            // `FnOnce`, this is prevented, so the transmute here is safe.
+            f(unsafe { mem::transmute::<&ParsedDwarf<'static>, &ParsedDwarf<'_>>(&*self.parsed) })
         }
     }
 
@@ -331,12 +342,12 @@ impl Dwarf {
 
     pub fn with_addr_frames<
         T,
-        F: for<'a> FnOnce(addr2line::FrameIter<Reader<'a>>) -> Result<T, Box<dyn std::error::Error>>,
+        F: for<'a> FnOnce(usize, FrameIter<'a>) -> Result<T, Box<dyn std::error::Error>>,
     >(
         &self,
         addr: usize,
         f: F,
     ) -> Result<T, Box<dyn std::error::Error>> {
-        self.rent(|parsed| f(parsed.get_addr_frames(addr)?))
+        self.rent(|parsed| f(addr, parsed.get_addr_frames(addr)?))
     }
 }

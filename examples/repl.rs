@@ -11,7 +11,7 @@ fn main() {
 #[cfg(target_os = "linux")]
 mod example {
     use headcrab::{
-        symbol::{DisassemblySource, RelocatedDwarf},
+        symbol::{dwarf_utils::SearchAction, DisassemblySource, RelocatedDwarf},
         target::{AttachOptions, LinuxTarget, UnixTarget},
     };
 
@@ -222,13 +222,14 @@ mod example {
                     Some(sub) => Err(format!("Unknown `bt` subcommand `{}`", sub))?,
                 };
                 for func in call_stack {
-                    let res = context.debuginfo().with_addr_frames(
-                        func,
-                        |mut frames: addr2line::FrameIter<_>| {
+                    let res = context
+                        .debuginfo()
+                        .with_addr_frames(func, |_addr, mut frames| {
                             let mut first_frame = true;
                             while let Some(frame) = frames.next()? {
                                 let name = frame
                                     .function
+                                    .as_ref()
                                     .map(|f| Ok(f.demangle()?.into_owned()))
                                     .transpose()
                                     .map_err(|err: gimli::Error| err)?
@@ -236,6 +237,7 @@ mod example {
 
                                 let location = frame
                                     .location
+                                    .as_ref()
                                     .map(|loc| {
                                         format!(
                                             "{}:{}",
@@ -254,8 +256,7 @@ mod example {
                                 first_frame = false;
                             }
                             Ok(first_frame)
-                        },
-                    )?;
+                        })?;
                     match res {
                         Some(true) | None => {
                             println!(
@@ -284,6 +285,87 @@ mod example {
                 }
                 let disassembly = context.disassembler.source_snippet(&code, ip, true)?;
                 println!("{}", disassembly);
+            }
+            Some("locals") => {
+                let regs = context.remote()?.read_regs()?;
+                let func = regs.rip as usize;
+                let res = context.debuginfo().with_addr_frames(
+                    func,
+                    |func, mut frames: headcrab::symbol::FrameIter| {
+                        let mut first_frame = true;
+                        while let Some(frame) = frames.next()? {
+                            let name = frame
+                                .function
+                                .as_ref()
+                                .map(|f| Ok(f.demangle()?.into_owned()))
+                                .transpose()
+                                .map_err(|err: gimli::Error| err)?
+                                .unwrap_or_else(|| "<unknown>".to_string());
+
+                            let location = frame
+                                .location
+                                .as_ref()
+                                .map(|loc| {
+                                    format!(
+                                        "{}:{}",
+                                        loc.file.unwrap_or("<unknown file>"),
+                                        loc.line.unwrap_or(0),
+                                    )
+                                })
+                                .unwrap_or_default();
+
+                            if first_frame {
+                                println!("{:016x} {} {}", func, name, location);
+                            } else {
+                                println!("                 {} {}", name, location);
+                            }
+
+                            let (dwarf, unit, dw_die_offset) = frame
+                                .function_debuginfo()
+                                .ok_or_else(|| "No dwarf debuginfo for function".to_owned())?;
+                            let _: Option<()> = headcrab::symbol::dwarf_utils::search_tree(
+                                unit,
+                                Some(dw_die_offset),
+                                |entry, indent| {
+                                    if entry.tag() == gimli::DW_TAG_inlined_subroutine
+                                        && entry.offset() != dw_die_offset
+                                    {
+                                        return Ok(SearchAction::SkipChildren); // Already visited by addr2line frame iter
+                                    }
+
+                                    println!("{:indent$}{}", "", entry.tag(), indent = indent * 2);
+
+                                    if entry.tag() == gimli::DW_TAG_lexical_block {
+                                        if !headcrab::symbol::dwarf_utils::in_range(
+                                            dwarf,
+                                            &unit,
+                                            Some(&entry),
+                                            func as u64,
+                                        )? {
+                                            println!(
+                                                "{:indent$}skipped",
+                                                "",
+                                                indent = indent * 2 + 2
+                                            );
+                                            return Ok(SearchAction::SkipChildren);
+                                        }
+                                    }
+
+                                    Ok(SearchAction::VisitChildren)
+                                },
+                            )?;
+
+                            first_frame = false;
+                        }
+                        Ok(first_frame)
+                    },
+                )?;
+                match res {
+                    Some(true) | None => {
+                        println!("no locals");
+                    }
+                    Some(false) => {}
+                }
             }
 
             // Patch the `pause` instruction inside a function called `breakpoint` to be a
