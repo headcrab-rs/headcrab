@@ -120,7 +120,8 @@ impl<'a> ReadMemory<'a> {
                 .filter(|map| !map.is_readable)
                 .collect::<Vec<_>>();
 
-            let (protected, readable) = split_protected(&protected_maps, &self.read_ops)?;
+            let (protected, readable) =
+                split_protected(&protected_maps, self.read_ops.iter().cloned())?;
 
             self.read_process_vm(&readable)?;
             self.read_ptrace(&protected)?;
