@@ -21,10 +21,10 @@ lazy_static::lazy_static! {
 }
 
 #[cfg(target_arch = "x86_64")]
-const SUPPORTED_HARDWARE_WATCHPOINTS: usize = 4;
+const SUPPORTED_HARDWARE_BREAKPOINTS: usize = 4;
 
 #[cfg(not(target_arch = "x86_64"))]
-const SUPPORTED_HARDWARE_WATCHPOINTS: usize = 0;
+const SUPPORTED_HARDWARE_BREAKPOINTS: usize = 0;
 
 struct LinuxThread {
     task: Task,
@@ -59,7 +59,7 @@ impl Thread for LinuxThread {
 /// You can use it to read & write debuggee's memory, pause it, set breakpoints, etc.
 pub struct LinuxTarget {
     pid: Pid,
-    watchpoints: [Option<Watchpoint>; SUPPORTED_HARDWARE_WATCHPOINTS],
+    hardware_breakpoints: [Option<HardwareBreakpoint>; SUPPORTED_HARDWARE_BREAKPOINTS],
 }
 
 /// This structure is used to pass options to attach
@@ -69,33 +69,33 @@ pub struct AttachOptions {
 }
 
 #[derive(Debug)]
-pub struct Watchpoint {
-    pub typ: WatchpointType,
+pub struct HardwareBreakpoint {
+    pub typ: HardwareBreakpointType,
     pub addr: usize,
-    pub size: WatchSize,
+    pub size: HardwareBreakpointSize,
 }
 
 #[derive(Copy, Clone, Debug)]
-pub enum WatchSize {
+pub enum HardwareBreakpointSize {
     _1 = 0b00,
     _2 = 0b01,
     _4 = 0b11,
     _8 = 0b10,
 }
-impl WatchSize {
+impl HardwareBreakpointSize {
     pub fn from_usize(size: usize) -> Result<Self, Box<dyn std::error::Error>> {
         match size {
-            1 => Ok(WatchSize::_1),
-            2 => Ok(WatchSize::_2),
-            4 => Ok(WatchSize::_4),
-            8 => Ok(WatchSize::_8),
-            x => Err(Box::new(WatchpointError::UnsupportedWatchSize(x))),
+            1 => Ok(Self::_1),
+            2 => Ok(Self::_2),
+            4 => Ok(Self::_4),
+            8 => Ok(Self::_8),
+            x => Err(Box::new(HardwareBreakpointError::UnsupportedWatchSize(x))),
         }
     }
 }
 
 #[derive(Debug)]
-pub enum WatchpointType {
+pub enum HardwareBreakpointType {
     Execute,
     Write,
     Read,
@@ -103,32 +103,35 @@ pub enum WatchpointType {
 }
 
 #[derive(Debug, Clone)]
-pub enum WatchpointError {
+pub enum HardwareBreakpointError {
     NoEmptyWatchpoint,
     DoesNotExist(usize),
     UnsupportedPlatform,
     UnsupportedWatchSize(usize),
 }
 
-impl std::fmt::Display for WatchpointError {
+impl std::fmt::Display for HardwareBreakpointError {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         let string = match self {
-            WatchpointError::NoEmptyWatchpoint => "No unused hardware options left".to_string(),
-            WatchpointError::DoesNotExist(index) => {
-                format!("Watchpoint at specified index ({}) does not exist", index)
+            HardwareBreakpointError::NoEmptyWatchpoint => {
+                "No unused hardware breakpoints left".to_string()
             }
-            WatchpointError::UnsupportedPlatform => {
-                "Watchpoints not supported on this platform".to_string()
+            HardwareBreakpointError::DoesNotExist(index) => format!(
+                "Hardware breakpoint at specified index ({}) does not exist",
+                index
+            ),
+            HardwareBreakpointError::UnsupportedPlatform => {
+                "Hardware breakpoints not supported on this platform".to_string()
             }
-            WatchpointError::UnsupportedWatchSize(size) => {
-                format!("WatchSize of {} is not supported", size)
+            HardwareBreakpointError::UnsupportedWatchSize(size) => {
+                format!("Hardware breakpoint size of {} is not supported", size)
             }
         };
         write!(f, "{}", string)
     }
 }
 
-impl std::error::Error for WatchpointError {}
+impl std::error::Error for HardwareBreakpointError {}
 
 impl UnixTarget for LinuxTarget {
     /// Provides the Pid of the debuggee process
@@ -141,7 +144,7 @@ impl LinuxTarget {
     fn new(pid: Pid) -> Self {
         Self {
             pid,
-            watchpoints: Default::default(),
+            hardware_breakpoints: Default::default(),
         }
     }
 
@@ -301,26 +304,26 @@ impl LinuxTarget {
     }
 
     #[cfg(target_arch = "x86_64")]
-    pub fn set_watchpoint(
+    pub fn set_hardware_breakpoint(
         &mut self,
-        watchpoint: Watchpoint,
+        breakpoint: HardwareBreakpoint,
     ) -> Result<usize, Box<dyn std::error::Error>> {
         #[cfg(target_arch = "x86_64")]
         {
             let empty = self.find_empty_watchpoint();
             if empty.is_none() {
-                return Err(Box::new(WatchpointError::NoEmptyWatchpoint));
+                return Err(Box::new(HardwareBreakpointError::NoEmptyWatchpoint));
             }
             let index = empty.unwrap();
 
-            let rw_bits: u64 = match watchpoint.typ {
-                WatchpointType::Execute => 0b00,
-                WatchpointType::Read => 0b11,
-                WatchpointType::ReadWrite => 0b11,
-                WatchpointType::Write => 0b01,
+            let rw_bits: u64 = match breakpoint.typ {
+                HardwareBreakpointType::Execute => 0b00,
+                HardwareBreakpointType::Read => 0b11,
+                HardwareBreakpointType::ReadWrite => 0b11,
+                HardwareBreakpointType::Write => 0b01,
             } << 16 + index * 4;
 
-            let size_bits: u64 = (watchpoint.size as u64) << (18 + index * 4);
+            let size_bits: u64 = (breakpoint.size as u64) << (18 + index * 4);
 
             let enable_bit: u64 = 1 << (2 * index);
 
@@ -344,7 +347,7 @@ impl LinuxTarget {
                     ptrace::Request::PTRACE_POKEUSER,
                     self.pid,
                     (*DEBUG_REG_OFFSET + index * 8) as *mut libc::c_void,
-                    watchpoint.addr as *mut libc::c_void,
+                    breakpoint.addr as *mut libc::c_void,
                 )?;
                 ptrace::ptrace(
                     ptrace::Request::PTRACE_POKEUSER,
@@ -360,22 +363,22 @@ impl LinuxTarget {
                 )?;
             }
 
-            self.watchpoints[index] = Some(watchpoint);
+            self.hardware_breakpoints[index] = Some(breakpoint);
 
             Ok(index)
         }
         #[cfg(not(target_arch = "x86_64"))]
-        Err(Box::new(WatchpointError::UnsupportedPlatform))
+        Err(Box::new(HardwareBreakpointError::UnsupportedPlatform))
     }
 
-    pub fn clear_watchpoint(
+    pub fn clear_hardware_breakpoint(
         &mut self,
         index: usize,
-    ) -> Result<Watchpoint, Box<dyn std::error::Error>> {
+    ) -> Result<HardwareBreakpoint, Box<dyn std::error::Error>> {
         #[cfg(target_arch = "x86_64")]
         {
-            if self.watchpoints[index].is_none() {
-                return Err(Box::new(WatchpointError::DoesNotExist(index)));
+            if self.hardware_breakpoints[index].is_none() {
+                return Err(Box::new(HardwareBreakpointError::DoesNotExist(index)));
             }
 
             let mut dr7: u64;
@@ -407,44 +410,42 @@ impl LinuxTarget {
                 )?;
             }
 
-            let watchpoint = std::mem::replace(&mut self.watchpoints[index], None);
+            let watchpoint = std::mem::replace(&mut self.hardware_breakpoints[index], None);
             Ok(watchpoint.unwrap())
         }
 
         #[cfg(not(target_arch = "x86_64"))]
-        Err(Box::new(WatchpointError::UnsupportedPlatform))
+        Err(Box::new(HardwareBreakpointError::UnsupportedPlatform))
     }
 
-    pub fn clear_all_watchpoints(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        #[cfg(target_arch = "x86_64")]
+    pub fn clear_all_hardware_breakpoints(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         {
-            for index in 0..SUPPORTED_HARDWARE_WATCHPOINTS {
-                match self.watchpoints[index] {
+            for index in 0..SUPPORTED_HARDWARE_BREAKPOINTS {
+                match self.hardware_breakpoints[index] {
                     Some(_) => {
-                        self.clear_watchpoint(index)?;
+                        self.clear_hardware_breakpoint(index)?;
                     }
                     None => (),
                 };
             }
             Ok(())
         }
-
-        #[cfg(not(target_arch = "x86_64"))]
-        Err(Box::new(WatchpointError::UnsupportedPlatform))
     }
 
-    pub fn is_watchpoint_triggered(&self) -> Result<Option<usize>, Box<dyn std::error::Error>> {
+    pub fn is_hardware_breakpoint_triggered(
+        &self,
+    ) -> Result<Option<usize>, Box<dyn std::error::Error>> {
         #[cfg(target_arch = "x86_64")]
         {
             let mut dr7 = self.ptrace_peekuser((*DEBUG_REG_OFFSET + 6 * 8) as *mut libc::c_void)?;
 
-            for i in 0..SUPPORTED_HARDWARE_WATCHPOINTS {
-                if dr7 & (1 << i) != 0 && self.watchpoints[i].is_some() {
+            for i in 0..SUPPORTED_HARDWARE_BREAKPOINTS {
+                if dr7 & (1 << i) != 0 && self.hardware_breakpoints[i].is_some() {
+                    // Clear bit for this breakpoint
                     dr7 &= !(1 << i);
-
+                    //Have to use deprecated function because of no alternative for PTRACE_POKEUSER
                     #[allow(deprecated)]
                     unsafe {
-                        //Have to use deprecated function because of no alternative for PTRACE_POKEUSER
                         ptrace::ptrace(
                             ptrace::Request::PTRACE_POKEUSER,
                             self.pid,
@@ -461,7 +462,7 @@ impl LinuxTarget {
         }
 
         #[cfg(not(target_arch = "x86_64"))]
-        Err(Box::new(WatchpointError::UnsupportedPlatform))
+        Err(Box::new(HardwareBreakpointError::UnsupportedPlatform))
     }
 
     // Temporary function until ptrace_peekuser is fixed in nix crate
@@ -486,7 +487,7 @@ impl LinuxTarget {
     }
 
     fn find_empty_watchpoint(&self) -> Option<usize> {
-        self.watchpoints.iter().position(|w| w.is_none())
+        self.hardware_breakpoints.iter().position(|w| w.is_none())
     }
 }
 
