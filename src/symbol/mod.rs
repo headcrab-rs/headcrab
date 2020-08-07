@@ -1,11 +1,12 @@
 //! This module provides a naive implementation of symbolication for the time being.
 //! It should be expanded to support multiple data sources.
 
+mod sym;
 pub mod unwind;
 
 use gimli::read::{EvaluationResult, Reader as _};
 use object::{
-    read::{Object, ObjectSection, ObjectSegment, Symbol},
+    read::{Object, ObjectSection, ObjectSegment},
     SymbolKind,
 };
 use std::{
@@ -15,6 +16,11 @@ use std::{
     path::Path,
     rc::Rc,
 };
+pub use sym::Symbol;
+
+mod source;
+
+pub use source::DisassemblySource;
 
 macro_rules! dwarf_attr_or_continue {
     (str($dwarf:ident,$unit:ident) $entry:ident.$name:ident) => {
@@ -64,10 +70,10 @@ type Reader<'a> = gimli::EndianReader<gimli::RunTimeEndian, RcCow<'a, [u8]>>;
 
 pub struct ParsedDwarf<'a> {
     object: object::File<'a>,
-    dwarf: gimli::Dwarf<Reader<'a>>,
+    addr2line: addr2line::Context<Reader<'a>>,
     vars: BTreeMap<String, usize>,
     symbols: Vec<Symbol<'a>>,
-    symbol_names: HashMap<&'a str, usize>,
+    symbol_names: HashMap<String, usize>,
 }
 
 impl<'a> ParsedDwarf<'a> {
@@ -105,6 +111,9 @@ impl<'a> ParsedDwarf<'a> {
 
         // Create `EndianSlice`s for all of the sections.
         let dwarf = gimli::Dwarf::load(loader, sup_loader)?;
+
+        let addr2line = addr2line::Context::from_dwarf(dwarf)?;
+        let dwarf = addr2line.dwarf();
 
         let mut units = dwarf.units();
 
@@ -148,23 +157,22 @@ impl<'a> ParsedDwarf<'a> {
                         return false;
                     }
                 }
-                !symbol.is_undefined()
-                    && symbol.section() != object::SymbolSection::Common
-                    && symbol.size() > 0
+                !symbol.is_undefined() && symbol.section() != object::SymbolSection::Common
             })
+            .map(Into::into)
             .collect();
-        symbols.sort_by_key(|sym| sym.address());
+        symbols.sort_by_key(|sym: &Symbol| sym.address());
 
         let mut symbol_names = HashMap::new();
         for sym in &symbols {
-            if let Some(name) = sym.name() {
-                symbol_names.insert(name, sym.address() as usize);
+            if let Some(name) = sym.demangled_name() {
+                symbol_names.insert(name.to_string(), sym.address() as usize);
             }
         }
 
         Ok(ParsedDwarf {
             object,
-            dwarf,
+            addr2line,
             vars,
             symbols,
             symbol_names,
@@ -175,7 +183,7 @@ impl<'a> ParsedDwarf<'a> {
         self.symbol_names.get(name).copied()
     }
 
-    pub fn get_address_symbol(&self, addr: usize) -> Option<object::Symbol> {
+    pub fn get_address_symbol(&self, addr: usize) -> Option<Symbol<'a>> {
         let index = match self
             .symbols
             .binary_search_by(|sym| sym.address().cmp(&(addr as u64)))
@@ -278,6 +286,17 @@ impl Dwarf {
         self.rent(|parsed| Some(parsed.get_address_symbol(addr)?.name()?.to_string()))
     }
 
+    pub fn get_address_demangled_name(&self, addr: usize) -> Option<String> {
+        self.rent(|parsed| {
+            Some(
+                parsed
+                    .get_address_symbol(addr)?
+                    .demangled_name()?
+                    .to_string(),
+            )
+        })
+    }
+
     pub fn get_address_symbol_kind(&self, addr: usize) -> Option<SymbolKind> {
         self.rent(|parsed| Some(parsed.get_address_symbol(addr)?.kind()))
     }
@@ -336,10 +355,10 @@ impl RelocatedDwarfEntry {
                         let object: &object::File = &parsed.object;
                         object.segments().find_map(|segment: object::Segment| {
                             // Sometimes the offset is just before the start file offset of the segment.
-                            if offset <= segment.file_range().0 {
+                            if offset <= segment.file_range().0 + segment.file_range().1 {
                                 Some((
                                     segment.file_range(),
-                                    segment.address() - (segment.file_range().0 - offset),
+                                    segment.address() - segment.file_range().0 + offset,
                                 ))
                             } else {
                                 None
@@ -405,6 +424,18 @@ impl RelocatedDwarf {
         None
     }
 
+    pub fn get_address_demangled_name(&self, addr: usize) -> Option<String> {
+        for entry in &self.0 {
+            if (addr as u64) < entry.address_range.0 || addr as u64 >= entry.address_range.1 {
+                continue;
+            }
+            return entry
+                .dwarf
+                .get_address_demangled_name(addr - entry.bias as usize);
+        }
+        None
+    }
+
     pub fn get_address_symbol_kind(&self, addr: usize) -> Option<SymbolKind> {
         for entry in &self.0 {
             if (addr as u64) < entry.address_range.0 || addr as u64 >= entry.address_range.1 {
@@ -427,5 +458,35 @@ impl RelocatedDwarf {
             }
         }
         None
+    }
+
+    pub fn source_location(
+        &self,
+        addr: usize,
+    ) -> Result<Option<(String, u64, u64)>, Box<dyn std::error::Error>> {
+        for entry in &self.0 {
+            if (addr as u64) < entry.address_range.0 || addr as u64 >= entry.address_range.1 {
+                continue;
+            }
+            return Ok(Some(
+                entry.dwarf.source_location(addr - entry.bias as usize)?,
+            ));
+        }
+        Ok(None)
+    }
+
+    pub fn source_snippet(
+        &self,
+        addr: usize,
+    ) -> Result<Option<String>, Box<dyn std::error::Error>> {
+        for entry in &self.0 {
+            if (addr as u64) < entry.address_range.0 || addr as u64 >= entry.address_range.1 {
+                continue;
+            }
+            return Ok(Some(
+                entry.dwarf.source_snippet(addr - entry.bias as usize)?,
+            ));
+        }
+        Ok(None)
     }
 }
