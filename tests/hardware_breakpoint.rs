@@ -25,7 +25,7 @@ fn hardware_breakpoint() -> Result<(), Box<dyn std::error::Error>> {
     let var_addr = debuginfo.get_symbol_address("STATICVAR");
     assert!(var_addr.is_some());
 
-    target.set_watchpoint(Watchpoint {
+    let wn = target.set_watchpoint(Watchpoint {
         addr: var_addr.unwrap(),
         typ: WatchpointType::Write,
         size: WatchSize::_1,
@@ -33,10 +33,11 @@ fn hardware_breakpoint() -> Result<(), Box<dyn std::error::Error>> {
 
     if let nix::sys::wait::WaitStatus::Stopped(_, signal) = target.unpause()? {
         assert_eq!(signal, nix::sys::signal::SIGTRAP)
-    }
-    else {
+    } else {
         panic!("Process hasn't stopped on watchpoint")
     }
+
+    assert_eq!(target.is_watchpoint_triggered()?, Some(wn));
 
     target.unpause()?;
 

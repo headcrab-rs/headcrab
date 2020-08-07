@@ -83,7 +83,7 @@ pub enum WatchSize {
     _8 = 0b10,
 }
 impl WatchSize {
-    fn from_usize(size: usize) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn from_usize(size: usize) -> Result<Self, Box<dyn std::error::Error>> {
         match size {
             1 => Ok(WatchSize::_1),
             2 => Ok(WatchSize::_2),
@@ -326,18 +326,8 @@ impl LinuxTarget {
 
             let bit_mask: u64 = (0b11 << (2 * index)) | (0b1111 << (16 + 4 * index));
 
-            let mut dr7: u64;
-
-            #[allow(deprecated)]
-            unsafe {
-                //Have to use deprecated function because of no alternative for PTRACE_PEEKUSER
-                dr7 = ptrace::ptrace(
-                    ptrace::Request::PTRACE_PEEKUSER,
-                    self.pid,
-                    (*DEBUG_REG_OFFSET + 8 * 7) as *mut libc::c_void,
-                    std::ptr::null_mut(),
-                )? as u64;
-            }
+            let mut dr7: u64 =
+                self.ptrace_peekuser((*DEBUG_REG_OFFSET + 7 * 8) as *mut libc::c_void)? as u64;
 
             // Check if hardware watchpoint is already used
             if dr7 & (1 << (2 * index)) != 0 {
@@ -346,7 +336,6 @@ impl LinuxTarget {
             }
 
             dr7 = (dr7 & !bit_mask) | (enable_bit | rw_bits | size_bits);
-
 
             #[allow(deprecated)]
             unsafe {
@@ -391,22 +380,9 @@ impl LinuxTarget {
 
             let mut dr7: u64;
             let mut dr6: u64;
-            #[allow(deprecated)]
-            unsafe {
-                //Have to use deprecated function because of no alternative for PTRACE_PEEKUSER
-                dr7 = ptrace::ptrace(
-                    ptrace::Request::PTRACE_PEEKUSER,
-                    self.pid,
-                    (*DEBUG_REG_OFFSET + 7) as *mut libc::c_void,
-                    std::ptr::null_mut(),
-                )? as u64;
-                dr6 = ptrace::ptrace(
-                    ptrace::Request::PTRACE_PEEKUSER,
-                    self.pid,
-                    (*DEBUG_REG_OFFSET + 6) as *mut libc::c_void,
-                    std::ptr::null_mut(),
-                )? as u64;
-            }
+
+            dr7 = self.ptrace_peekuser((*DEBUG_REG_OFFSET + 7 * 8) as *mut libc::c_void)? as u64;
+            dr6 = self.ptrace_peekuser((*DEBUG_REG_OFFSET + 6 * 8) as *mut libc::c_void)? as u64;
 
             let bit_mask: u32 = (0b11 << (2 * index)) | (0b1111 << (16 + 4 * index));
             dr7 = dr7 & !(bit_mask as u64);
@@ -420,13 +396,13 @@ impl LinuxTarget {
                 ptrace::ptrace(
                     ptrace::Request::PTRACE_POKEUSER,
                     self.pid,
-                    (*DEBUG_REG_OFFSET + 7) as *mut libc::c_void,
+                    (*DEBUG_REG_OFFSET + 7 * 8) as *mut libc::c_void,
                     dr7 as *mut libc::c_void,
                 )?;
                 ptrace::ptrace(
                     ptrace::Request::PTRACE_POKEUSER,
                     self.pid,
-                    (*DEBUG_REG_OFFSET + 6) as *mut libc::c_void,
+                    (*DEBUG_REG_OFFSET + 6 * 8) as *mut libc::c_void,
                     dr6 as *mut libc::c_void,
                 )?;
             }
@@ -455,6 +431,58 @@ impl LinuxTarget {
 
         #[cfg(not(target_arch = "x86_64"))]
         Err(Box::new(WatchpointError::UnsupportedPlatform))
+    }
+
+    pub fn is_watchpoint_triggered(&self) -> Result<Option<usize>, Box<dyn std::error::Error>> {
+        #[cfg(target_arch = "x86_64")]
+        {
+            let mut dr7 = self.ptrace_peekuser((*DEBUG_REG_OFFSET + 6 * 8) as *mut libc::c_void)?;
+
+            for i in 0..SUPPORTED_HARDWARE_WATCHPOINTS {
+                if dr7 & (1 << i) != 0 && self.watchpoints[i].is_some() {
+                    dr7 &= !(1 << i);
+
+                    #[allow(deprecated)]
+                    unsafe {
+                        //Have to use deprecated function because of no alternative for PTRACE_POKEUSER
+                        ptrace::ptrace(
+                            ptrace::Request::PTRACE_POKEUSER,
+                            self.pid,
+                            (*DEBUG_REG_OFFSET + 6 * 8) as *mut libc::c_void,
+                            dr7 as *mut libc::c_void,
+                        )?;
+                    }
+
+                    return Ok(Some(i));
+                }
+            }
+
+            Ok(None)
+        }
+
+        #[cfg(not(target_arch = "x86_64"))]
+        Err(Box::new(WatchpointError::UnsupportedPlatform))
+    }
+
+    // Temporary function until ptrace_peekuser is fixed in nix crate
+    #[cfg(target_arch = "x86_64")]
+    fn ptrace_peekuser(
+        &self,
+        addr: *mut libc::c_void,
+    ) -> Result<libc::c_long, Box<dyn std::error::Error>> {
+        let ret = unsafe {
+            nix::errno::Errno::clear();
+            libc::ptrace(
+                ptrace::Request::PTRACE_PEEKUSER as libc::c_uint,
+                libc::pid_t::from(self.pid),
+                addr,
+                std::ptr::null_mut() as *mut libc::c_void,
+            )
+        };
+        match nix::errno::Errno::result(ret) {
+            Ok(..) | Err(nix::Error::Sys(nix::errno::Errno::UnknownErrno)) => Ok(ret),
+            Err(err) => Err(Box::new(err)),
+        }
     }
 
     fn find_empty_watchpoint(&self) -> Option<usize> {
