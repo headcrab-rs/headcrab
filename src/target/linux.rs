@@ -242,17 +242,17 @@ pub fn get_addr_range(pid: Pid) -> Result<usize, Box<dyn std::error::Error>> {
 mod tests {
     use super::*;
 
-    use super::{AttachOptions, LinuxTarget, ReadMemory};
-    use nix::unistd::{fork, getpid, ForkResult};
-    use std::sync::{Arc, Barrier};
-    use std::thread;
-
-    use std::alloc::{alloc_zeroed, dealloc, Layout};
-
-    use nix::sys::{
-        mman::{mprotect, ProtFlags},
-        ptrace, signal, wait,
+    use super::{memory::PAGE_SIZE, AttachOptions, LinuxTarget, ReadMemory};
+    use nix::{
+        sys::{
+            mman::{mprotect, ProtFlags},
+            ptrace, signal, wait,
+        },
+        unistd::{fork, getpid, ForkResult},
     };
+    use std::alloc::{alloc_zeroed, dealloc, Layout};
+    use std::sync::{Arc, Barrier};
+    use std::{mem, ptr, thread, time};
 
     #[test]
     fn read_memory() {
@@ -275,8 +275,6 @@ mod tests {
         assert_eq!(read_var_op, var);
     }
 
-    const PAGE_SIZE: usize = 4096;
-
     #[test]
     fn read_protected_memory() {
         let mut read_var1_op: u8 = 0;
@@ -285,7 +283,7 @@ mod tests {
         let var1: u8 = 1;
         let var2: usize = 2;
 
-        let layout = Layout::from_size_align(2 * PAGE_SIZE, PAGE_SIZE).unwrap();
+        let layout = Layout::from_size_align(2 * *PAGE_SIZE, *PAGE_SIZE).unwrap();
 
         unsafe {
             let ptr = alloc_zeroed(layout);
@@ -296,7 +294,7 @@ mod tests {
 
                     mprotect(
                         ptr as *mut std::ffi::c_void,
-                        PAGE_SIZE,
+                        *PAGE_SIZE,
                         ProtFlags::PROT_WRITE,
                     )
                     .expect("Failed to mprotect");
@@ -323,8 +321,8 @@ mod tests {
                         .apply()
                         .expect("ReadMemory failed");
 
-                    assert_eq!(std::ptr::read_volatile(&read_var1_op), var1);
-                    assert_eq!(std::ptr::read_volatile(&read_var2_op), var2);
+                    assert_eq!(ptr::read_volatile(&read_var1_op), var1);
+                    assert_eq!(ptr::read_volatile(&read_var2_op), var2);
 
                     dealloc(ptr, layout);
 
@@ -337,37 +335,37 @@ mod tests {
         }
     }
 
+    /// This test attempts to read memory from 2 consecutive pages, one of which is read-protected.
+    /// `ReadMemory` implementation should properly choose the memory reading strategy to cover this case:
+    /// for read-protected page, it should use `ptrace()` and still return a valid result.
     #[test]
     fn read_cross_page_memory() {
-        let mut read_var_op = [0u32; PAGE_SIZE + 2];
+        let mut read_var_op = vec![0u32; *PAGE_SIZE + 2];
 
-        let mut var = [123; PAGE_SIZE + 2];
+        let mut var = vec![123u32; *PAGE_SIZE + 2];
         var[0] = 321;
-        var[PAGE_SIZE + 1] = 234;
+        var[*PAGE_SIZE + 1] = 234;
 
         unsafe {
-            let layout = Layout::from_size_align(PAGE_SIZE * 3, PAGE_SIZE).unwrap();
+            let layout = Layout::from_size_align(*PAGE_SIZE * 3, *PAGE_SIZE).unwrap();
             let ptr = alloc_zeroed(layout);
 
-            let array_ptr = (ptr as usize + PAGE_SIZE - std::mem::size_of::<u32>()) as *mut u8;
-
-            let second_page_ptr = (ptr as usize + PAGE_SIZE) as *mut std::ffi::c_void;
+            let array_ptr = ptr.offset((*PAGE_SIZE - mem::size_of::<u32>()) as isize);
+            let second_page_ptr = ptr.offset(*PAGE_SIZE as _);
 
             match fork() {
                 Ok(ForkResult::Child) => {
-                    *(array_ptr as *mut [u32; PAGE_SIZE + 2]) = var;
-                    mprotect(second_page_ptr, PAGE_SIZE, ProtFlags::PROT_WRITE)
+                    ptr::copy_nonoverlapping(var.as_ptr(), array_ptr as *mut u32, *PAGE_SIZE + 2);
+
+                    mprotect(second_page_ptr as *mut _, *PAGE_SIZE, ProtFlags::PROT_WRITE)
                         .expect("Failed to mprotect");
 
                     // Parent reads memory
-
-                    use std::{thread, time};
                     thread::sleep(time::Duration::from_millis(300));
 
                     dealloc(ptr, layout);
                 }
                 Ok(ForkResult::Parent { child, .. }) => {
-                    use std::{thread, time};
                     thread::sleep(time::Duration::from_millis(100));
 
                     let (target, _wait_status) =
@@ -376,11 +374,11 @@ mod tests {
 
                     target
                         .read()
-                        .read(&mut read_var_op, array_ptr as *const _ as usize)
+                        .read_slice(&mut read_var_op, array_ptr as *const _ as usize)
                         .apply()
                         .expect("Failed to apply mem_op");
 
-                    for i in 0..PAGE_SIZE + 2 {
+                    for i in 0..(*PAGE_SIZE + 2) {
                         assert_eq!(var[i], read_var_op[i]);
                     }
 

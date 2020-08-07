@@ -47,6 +47,55 @@ impl<'a> ReadMemory<'a> {
         self
     }
 
+    /// Reads a value of type `*mut T` from debuggee's memory at location `remote_base`.
+    /// This value will be written to the provided pointer `ptr`.
+    /// You should call `apply` in order to execute the memory read operation.
+    /// The provided pointer `ptr` can't be accessed until either `apply` is called or `self` is
+    /// dropped.
+    ///
+    /// # Safety
+    ///
+    /// Memory location at `ptr` must be of valid size and must not be outlived by `ReadMem`.
+    /// You need to ensure the lifetime guarantees, and generally you should prefer using `read<T>(&mut val)`.
+    // todo: further document mem safety - e.g., what happens in the case of partial read
+    pub unsafe fn read_ptr<T>(mut self, ptr: *mut T, remote_base: usize) -> Self {
+        self.read_ops.append(
+            &mut ReadOp {
+                remote_base,
+                len: mem::size_of::<T>(),
+                local_ptr: ptr as *mut _,
+            }
+            .split_on_page_boundary(),
+        );
+
+        self
+    }
+
+    /// Reads a slice of type `&mut [T]` from debuggee's memory at location `remote_base`.
+    /// This value will be written to the provided slice `val`.
+    /// You should call `apply` in order to execute the memory read operation.
+    /// The provided value `val` can't be accessed until either `apply` is called or `self` is
+    /// dropped.
+    ///
+    /// # Safety
+    ///
+    /// The type `T` must not have any invalid values.
+    /// For example, `T` must not be a `bool`, as `transmute::<u8, bool>(2)` is not a valid value for a bool.
+    /// In case of doubt, wrap the type in [`mem::MaybeUninit`].
+    // todo: further document mem safety - e.g., what happens in the case of partial read
+    pub unsafe fn read_slice<T>(mut self, val: &'a mut [T], remote_base: usize) -> Self {
+        self.read_ops.append(
+            &mut ReadOp {
+                remote_base,
+                len: val.len() * mem::size_of::<T>(),
+                local_ptr: val.as_mut_ptr() as *mut _,
+            }
+            .split_on_page_boundary(),
+        );
+
+        self
+    }
+
     /// Executes the memory read operation.
     pub fn apply(self) -> Result<(), Box<dyn std::error::Error>> {
         let read_len = self
@@ -59,13 +108,7 @@ impl<'a> ReadMemory<'a> {
         };
 
         // FIXME: Probably a better way to do this
-        let result = self.read_process_vm(
-            &self
-                .read_ops
-                .iter()
-                .map(|read_op| read_op)
-                .collect::<Vec<_>>(),
-        );
+        let result = self.read_process_vm(&self.read_ops);
 
         if result.is_err() && result.unwrap_err() == nix::Error::Sys(nix::errno::Errno::EFAULT)
             || result.is_ok() && result.unwrap() != read_len as isize
@@ -87,7 +130,7 @@ impl<'a> ReadMemory<'a> {
 
     /// Allows to read from several different locations with one system call.
     /// It will ignore pages that are not readable. Returns number of bytes read at granularity of ReadOps.
-    fn read_process_vm(&self, read_ops: &[&ReadOp]) -> Result<isize, nix::Error> {
+    fn read_process_vm(&self, read_ops: &[ReadOp]) -> Result<isize, nix::Error> {
         let remote_iov = read_ops
             .iter()
             .map(|read_op| read_op.as_remote_iovec())
@@ -119,7 +162,7 @@ impl<'a> ReadMemory<'a> {
 
     /// Allows to read from protected memory pages.
     /// This operation results in multiple system calls and is inefficient.
-    fn read_ptrace(&self, read_ops: &[&ReadOp]) -> Result<(), Box<dyn std::error::Error>> {
+    fn read_ptrace(&self, read_ops: &[ReadOp]) -> Result<(), Box<dyn std::error::Error>> {
         let long_size = std::mem::size_of::<std::os::raw::c_long>();
 
         for read_op in read_ops {
@@ -160,6 +203,7 @@ impl<'a> ReadMemory<'a> {
 }
 
 /// A single memory read operation.
+#[derive(Debug, Clone, Copy)]
 struct ReadOp {
     // Remote memory location.
     remote_base: usize,
