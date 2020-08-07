@@ -310,11 +310,11 @@ impl LinuxTarget {
     ) -> Result<usize, Box<dyn std::error::Error>> {
         #[cfg(target_arch = "x86_64")]
         {
-            let empty = self.find_empty_watchpoint();
-            if empty.is_none() {
+            let index = if let Some(empty) = self.find_empty_watchpoint() {
+                empty
+            } else {
                 return Err(Box::new(HardwareBreakpointError::NoEmptyWatchpoint));
-            }
-            let index = empty.unwrap();
+            };
 
             let rw_bits: u64 = match breakpoint.typ {
                 HardwareBreakpointType::Execute => 0b00,
