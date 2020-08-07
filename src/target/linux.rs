@@ -318,18 +318,13 @@ impl LinuxTarget {
                 WatchpointType::Read => 0b11,
                 WatchpointType::ReadWrite => 0b11,
                 WatchpointType::Write => 0b01,
-            } << 16 + index * 2;
+            } << 16 + index * 4;
 
-            let size_bits: u64 = (watchpoint.size as u64) << 18 + index * 2;
+            let size_bits: u64 = (watchpoint.size as u64) << (18 + index * 4);
 
             let enable_bit: u64 = 1 << (2 * index);
 
-            let ge_le_bits: u64 = 0b11 << 8;
-
-            let reserved_bit: u64 = 1 << 10;
-
-            let bit_mask: u64 =
-                (0b11 << (2 * index)) | (0b11 << 8) | (1 << 10) | (0b1111 << (16 + 4 * index));
+            let bit_mask: u64 = (0b11 << (2 * index)) | (0b1111 << (16 + 4 * index));
 
             let mut dr7: u64;
 
@@ -340,7 +335,7 @@ impl LinuxTarget {
                     ptrace::Request::PTRACE_PEEKUSER,
                     self.pid,
                     (*DEBUG_REG_OFFSET + 8 * 7) as *mut libc::c_void,
-                    0 as *mut libc::c_void,
+                    std::ptr::null_mut(),
                 )? as u64;
             }
 
@@ -350,12 +345,8 @@ impl LinuxTarget {
                 panic!("Invalid debug register state")
             }
 
-            println!("{:b}", dr7);
-            dr7 =
-                (dr7 & !bit_mask) | (enable_bit | rw_bits | size_bits | ge_le_bits | reserved_bit);
-            println!("{:b}", dr7);
+            dr7 = (dr7 & !bit_mask) | (enable_bit | rw_bits | size_bits);
 
-            let mut addr = watchpoint.addr;
 
             #[allow(deprecated)]
             unsafe {
@@ -364,13 +355,19 @@ impl LinuxTarget {
                     ptrace::Request::PTRACE_POKEUSER,
                     self.pid,
                     (*DEBUG_REG_OFFSET + index * 8) as *mut libc::c_void,
-                    &mut addr as *mut _ as *mut libc::c_void,
+                    watchpoint.addr as *mut libc::c_void,
                 )?;
                 ptrace::ptrace(
                     ptrace::Request::PTRACE_POKEUSER,
                     self.pid,
                     (*DEBUG_REG_OFFSET + 7 * 8) as *mut libc::c_void,
-                    &mut dr7 as *mut _ as *mut libc::c_void,
+                    dr7 as *mut libc::c_void,
+                )?;
+                ptrace::ptrace(
+                    ptrace::Request::PTRACE_POKEUSER,
+                    self.pid,
+                    (*DEBUG_REG_OFFSET + 6 * 8) as *mut libc::c_void,
+                    0 as *mut libc::c_void,
                 )?;
             }
 
@@ -401,13 +398,13 @@ impl LinuxTarget {
                     ptrace::Request::PTRACE_PEEKUSER,
                     self.pid,
                     (*DEBUG_REG_OFFSET + 7) as *mut libc::c_void,
-                    0 as *mut libc::c_void,
+                    std::ptr::null_mut(),
                 )? as u64;
                 dr6 = ptrace::ptrace(
                     ptrace::Request::PTRACE_PEEKUSER,
                     self.pid,
                     (*DEBUG_REG_OFFSET + 6) as *mut libc::c_void,
-                    0 as *mut libc::c_void,
+                    std::ptr::null_mut(),
                 )? as u64;
             }
 
@@ -424,13 +421,13 @@ impl LinuxTarget {
                     ptrace::Request::PTRACE_POKEUSER,
                     self.pid,
                     (*DEBUG_REG_OFFSET + 7) as *mut libc::c_void,
-                    &mut dr7 as *mut _ as *mut libc::c_void,
+                    dr7 as *mut libc::c_void,
                 )?;
                 ptrace::ptrace(
                     ptrace::Request::PTRACE_POKEUSER,
                     self.pid,
                     (*DEBUG_REG_OFFSET + 6) as *mut libc::c_void,
-                    &mut dr6 as *mut _ as *mut libc::c_void,
+                    dr6 as *mut libc::c_void,
                 )?;
             }
 

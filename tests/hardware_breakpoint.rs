@@ -31,7 +31,12 @@ fn hardware_breakpoint() -> Result<(), Box<dyn std::error::Error>> {
         size: WatchSize::_1,
     })?;
 
-    target.unpause()?;
+    if let nix::sys::wait::WaitStatus::Stopped(_, signal) = target.unpause()? {
+        assert_eq!(signal, nix::sys::signal::SIGTRAP)
+    }
+    else {
+        panic!("Process hasn't stopped on watchpoint")
+    }
 
     target.unpause()?;
 
