@@ -1,3 +1,4 @@
+use super::dwarf_utils::SearchAction;
 use super::*;
 
 pub struct Frame<'a> {
@@ -17,6 +18,148 @@ impl<'a> Frame<'a> {
         self.frame
             .dw_die_offset
             .map(|unit_offset| (self.dwarf, self.unit.unwrap(), unit_offset))
+    }
+
+    pub fn print_debuginfo(&self) {
+        println!(
+            "{}:",
+            self.frame
+                .function
+                .as_ref()
+                .map(|name| name.raw_name().unwrap().into_owned())
+                .unwrap_or_else(|| "<unknown name>".to_owned())
+        );
+        if let Some((_dwarf, unit, dw_die_offset)) = self.function_debuginfo() {
+            let _: Option<()> =
+                dwarf_utils::search_tree(unit, Some(dw_die_offset), |entry, indent| {
+                    if entry.tag() == gimli::DW_TAG_inlined_subroutine
+                        && entry.offset() != dw_die_offset
+                    {
+                        return Ok(SearchAction::SkipChildren); // Already visited by addr2line frame iter
+                    }
+
+                    println!("{:indent$}{}", "", entry.tag(), indent = indent * 2);
+
+                    let mut attrs = entry.attrs();
+                    while let Some(attr) = attrs.next()? {
+                        println!("{:indent$}{}", "", attr.name(), indent = indent * 2 + 2);
+                    }
+
+                    Ok(SearchAction::VisitChildren)
+                })
+                .map_err(|e: Box<dyn std::error::Error>| e)
+                .unwrap();
+        } else {
+            println!("no dwarf entry for function");
+        }
+    }
+
+    pub fn each_local<
+        E: From<gimli::Error> + From<String>,
+        F: Fn(Local<'_, 'a>) -> Result<(), E>,
+    >(
+        &self,
+        addr: u64,
+        f: F,
+    ) -> Result<(), E> {
+        let (dwarf, unit, dw_die_offset) = self
+            .function_debuginfo()
+            .ok_or_else(|| "No dwarf debuginfo for function".to_owned())?;
+        dwarf_utils::search_tree(unit, Some(dw_die_offset), |entry, _indent| {
+            if entry.tag() == gimli::DW_TAG_inlined_subroutine && entry.offset() != dw_die_offset {
+                return Ok(SearchAction::SkipChildren); // Already visited by addr2line frame iter
+            }
+
+            if entry.tag() == gimli::DW_TAG_lexical_block {
+                if !super::dwarf_utils::in_range(dwarf, &unit, Some(&entry), addr)? {
+                    return Ok(SearchAction::SkipChildren);
+                }
+            }
+
+            if entry.tag() == gimli::DW_TAG_variable {
+                let origin_entry = if let Some(origin) = entry.attr(gimli::DW_AT_abstract_origin)? {
+                    let origin = match origin.value() {
+                        gimli::AttributeValue::UnitRef(offset) => offset,
+                        _ => panic!("{:?}", origin.value()),
+                    };
+                    unit.entry(origin)?
+                } else {
+                    entry.clone()
+                };
+                let name = origin_entry
+                    .attr(gimli::DW_AT_name)?
+                    .map(|name| {
+                        name.string_value(&dwarf.debug_str)
+                            .ok_or_else(|| "Local name not a string".to_owned())
+                    })
+                    .transpose()?;
+
+                let type_ = origin_entry
+                    .attr(gimli::DW_AT_type)?
+                    .map(|attr| match attr.value() {
+                        gimli::AttributeValue::UnitRef(type_) => Ok(type_),
+                        val => Err(format!(
+                            "`{:?}` is not a valid value for a DW_AT_type attribute",
+                            val
+                        )),
+                    })
+                    .transpose()?
+                    .map(|type_| unit.entry(type_))
+                    .transpose()?;
+
+                let location = if let Some(loc) = entry.attr(gimli::DW_AT_location)? {
+                    match loc.value() {
+                        gimli::AttributeValue::Exprloc(loc) => Some(loc),
+                        gimli::AttributeValue::LocationListsRef(loc_list) => {
+                            let mut loc_list = dwarf.locations(unit, loc_list)?;
+                            let mut loc = None;
+                            while let Some(entry) = loc_list.next()? {
+                                if entry.range.begin <= addr && addr < entry.range.end {
+                                    loc = Some(entry.data);
+                                    break;
+                                }
+                            }
+                            loc
+                        }
+                        val => unreachable!("{:?}", val),
+                    }
+                } else {
+                    None
+                };
+
+                f(Local {
+                    name,
+                    type_,
+                    location,
+                })?;
+            }
+
+            Ok(SearchAction::VisitChildren)
+        })
+        .map(|_: Option<()>| ())
+    }
+}
+
+pub struct Local<'a, 'ctx> {
+    name: Option<Reader<'ctx>>,
+    type_: Option<gimli::DebuggingInformationEntry<'a, 'a, Reader<'ctx>>>,
+    location: Option<gimli::Expression<Reader<'ctx>>>,
+}
+
+impl<'a, 'ctx> Local<'a, 'ctx> {
+    pub fn name(&'a self) -> Result<Option<&'a str>, std::str::Utf8Error> {
+        self.name
+            .as_ref()
+            .map(|name| std::str::from_utf8(name.bytes()))
+            .transpose()
+    }
+
+    pub fn type_(&'a self) -> Option<&'a gimli::DebuggingInformationEntry<'a, 'a, Reader<'ctx>>> {
+        self.type_.as_ref()
+    }
+
+    pub fn location(&'a self) -> Option<&'a gimli::Expression<Reader<'ctx>>> {
+        self.location.as_ref()
     }
 }
 
