@@ -353,7 +353,8 @@ mod example {
 
                                     Ok(SearchAction::VisitChildren)
                                 },
-                            )?;
+                            )
+                            .map_err(|e: Box<dyn std::error::Error>| e)?;
 
                             first_frame = false;
                         }
