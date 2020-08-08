@@ -54,6 +54,32 @@ impl<'a> Frame<'a> {
         }
     }
 
+    pub fn each_argument<
+        E: From<gimli::Error> + From<String>,
+        F: Fn(Local<'_, 'a>) -> Result<(), E>,
+    >(
+        &self,
+        addr: u64,
+        f: F,
+    ) -> Result<(), E> {
+        let (dwarf, unit, dw_die_offset) = self
+            .function_debuginfo()
+            .ok_or_else(|| "No dwarf debuginfo for function".to_owned())?;
+
+        dwarf_utils::search_tree(unit, Some(dw_die_offset), |entry, _indent| {
+            if entry.offset() == dw_die_offset {
+                return Ok(SearchAction::VisitChildren);
+            }
+
+            if entry.tag() == gimli::DW_TAG_formal_parameter {
+                f(Local::from_entry::<E>(dwarf, unit, entry, addr)?)?;
+            }
+
+            Ok(SearchAction::SkipChildren)
+        })
+        .map(|_: Option<()>| ())
+    }
+
     pub fn each_local<
         E: From<gimli::Error> + From<String>,
         F: Fn(Local<'_, 'a>) -> Result<(), E>,
@@ -77,63 +103,7 @@ impl<'a> Frame<'a> {
             }
 
             if entry.tag() == gimli::DW_TAG_variable {
-                let origin_entry = if let Some(origin) = entry.attr(gimli::DW_AT_abstract_origin)? {
-                    let origin = match origin.value() {
-                        gimli::AttributeValue::UnitRef(offset) => offset,
-                        _ => panic!("{:?}", origin.value()),
-                    };
-                    unit.entry(origin)?
-                } else {
-                    entry.clone()
-                };
-                let name = origin_entry
-                    .attr(gimli::DW_AT_name)?
-                    .map(|name| {
-                        name.string_value(&dwarf.debug_str)
-                            .ok_or_else(|| "Local name not a string".to_owned())
-                    })
-                    .transpose()?;
-
-                let type_ = origin_entry
-                    .attr(gimli::DW_AT_type)?
-                    .map(|attr| match attr.value() {
-                        gimli::AttributeValue::UnitRef(type_) => Ok(type_),
-                        val => Err(format!(
-                            "`{:?}` is not a valid value for a DW_AT_type attribute",
-                            val
-                        )),
-                    })
-                    .transpose()?
-                    .map(|type_| unit.entry(type_))
-                    .transpose()?;
-
-                let value = if let Some(loc) = entry.attr(gimli::DW_AT_location)? {
-                    match loc.value() {
-                        gimli::AttributeValue::Exprloc(loc) => LocalValue::Expr(loc),
-                        gimli::AttributeValue::LocationListsRef(loc_list) => {
-                            let mut loc_list = dwarf.locations(unit, loc_list)?;
-                            let mut loc = None;
-                            while let Some(entry) = loc_list.next()? {
-                                if entry.range.begin <= addr && addr < entry.range.end {
-                                    loc = Some(entry.data);
-                                    break;
-                                }
-                            }
-                            if let Some(loc) = loc {
-                                LocalValue::Expr(loc)
-                            } else {
-                                LocalValue::OptimizedOut
-                            }
-                        }
-                        val => unreachable!("{:?}", val),
-                    }
-                } else if let Some(const_val) = entry.attr(gimli::DW_AT_const_value)? {
-                    LocalValue::Const(const_val.udata_value().unwrap())
-                } else {
-                    LocalValue::Unknown
-                };
-
-                f(Local { name, type_, value })?;
+                f(Local::from_entry::<E>(dwarf, unit, entry, addr)?)?;
             }
 
             Ok(SearchAction::VisitChildren)
@@ -156,6 +126,72 @@ pub enum LocalValue<'ctx> {
 }
 
 impl<'a, 'ctx> Local<'a, 'ctx> {
+    pub fn from_entry<E: From<gimli::Error> + From<String>>(
+        dwarf: &'a gimli::Dwarf<Reader<'ctx>>,
+        unit: &'a gimli::Unit<Reader<'ctx>>,
+        entry: gimli::DebuggingInformationEntry<'a, 'a, Reader<'ctx>>,
+        addr: u64,
+    ) -> Result<Self, E> {
+        let origin_entry = if let Some(origin) = entry.attr(gimli::DW_AT_abstract_origin)? {
+            let origin = match origin.value() {
+                gimli::AttributeValue::UnitRef(offset) => offset,
+                _ => panic!("{:?}", origin.value()),
+            };
+            unit.entry(origin)?
+        } else {
+            entry.clone()
+        };
+
+        let name = origin_entry
+            .attr(gimli::DW_AT_name)?
+            .map(|name| {
+                name.string_value(&dwarf.debug_str)
+                    .ok_or_else(|| "Local name not a string".to_owned())
+            })
+            .transpose()?;
+
+        let type_ = origin_entry
+            .attr(gimli::DW_AT_type)?
+            .map(|attr| match attr.value() {
+                gimli::AttributeValue::UnitRef(type_) => Ok(type_),
+                val => Err(format!(
+                    "`{:?}` is not a valid value for a DW_AT_type attribute",
+                    val
+                )),
+            })
+            .transpose()?
+            .map(|type_| unit.entry(type_))
+            .transpose()?;
+
+        let value = if let Some(loc) = entry.attr(gimli::DW_AT_location)? {
+            match loc.value() {
+                gimli::AttributeValue::Exprloc(loc) => LocalValue::Expr(loc),
+                gimli::AttributeValue::LocationListsRef(loc_list) => {
+                    let mut loc_list = dwarf.locations(unit, loc_list)?;
+                    let mut loc = None;
+                    while let Some(entry) = loc_list.next()? {
+                        if entry.range.begin <= addr && addr < entry.range.end {
+                            loc = Some(entry.data);
+                            break;
+                        }
+                    }
+                    if let Some(loc) = loc {
+                        LocalValue::Expr(loc)
+                    } else {
+                        LocalValue::OptimizedOut
+                    }
+                }
+                val => unreachable!("{:?}", val),
+            }
+        } else if let Some(const_val) = entry.attr(gimli::DW_AT_const_value)? {
+            LocalValue::Const(const_val.udata_value().unwrap())
+        } else {
+            LocalValue::Unknown
+        };
+
+        Ok(Local { name, type_, value })
+    }
+
     pub fn name(&'a self) -> Result<Option<&'a str>, std::str::Utf8Error> {
         self.name
             .as_ref()

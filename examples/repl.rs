@@ -348,78 +348,14 @@ mod example {
                                 None
                             };
 
+                            frame.each_argument::<Box<dyn std::error::Error>, _>(
+                                func as u64,
+                                |local| show_local("arg", context, unit, frame_base, regs, local),
+                            )?;
+
                             frame.each_local::<Box<dyn std::error::Error>, _>(
                                 func as u64,
-                                |local| {
-                                    let type_size = local
-                                        .type_()
-                                        .map(|type_| type_.attr(gimli::DW_AT_byte_size))
-                                        .transpose()?
-                                        .map(|size| size.unwrap().udata_value().unwrap())
-                                        .unwrap_or(0);
-
-                                    let value = match local.value() {
-                                        headcrab::symbol::LocalValue::Expr(expr) => {
-                                            let res =
-                                                headcrab::symbol::dwarf_utils::evaluate_expression(
-                                                    unit,
-                                                    expr.clone(),
-                                                    frame_base,
-                                                    get_linux_x86_64_reg(regs),
-                                                )?;
-                                            assert_eq!(res.len(), 1);
-                                            assert_eq!(res[0].bit_offset, None);
-                                            assert_eq!(res[0].size_in_bits, None);
-                                            match res[0].location {
-                                                gimli::Location::Address { address } => {
-                                                    match type_size {
-                                                        8 => {
-                                                            let mut val = 0u64;
-                                                            unsafe {
-                                                                context
-                                                                    .remote()
-                                                                    .unwrap()
-                                                                    .read()
-                                                                    .read(
-                                                                        &mut val,
-                                                                        address as usize,
-                                                                    )
-                                                                    .apply()
-                                                                    .unwrap();
-                                                            }
-                                                            format!("{}", val)
-                                                        }
-                                                        _ => unimplemented!("{}", type_size),
-                                                    }
-                                                }
-                                                gimli::Location::Value { value } => match value {
-                                                    gimli::Value::Generic(val) => {
-                                                        format!("{}", val)
-                                                    }
-                                                    val => unimplemented!("{:?}", val),
-                                                },
-                                                ref loc => unimplemented!("{:?}", loc),
-                                            }
-                                        }
-                                        headcrab::symbol::LocalValue::Const(val) => {
-                                            format!("const {}", val)
-                                        }
-                                        headcrab::symbol::LocalValue::OptimizedOut => {
-                                            "<optimized out>".to_owned()
-                                        }
-                                        headcrab::symbol::LocalValue::Unknown => {
-                                            "<unknown>".to_owned()
-                                        }
-                                    };
-
-                                    println!(
-                                        "{} = {}",
-                                        local.name()?.unwrap_or("<no name>"),
-                                        value
-                                    );
-
-                                    Ok(())
-                                },
+                                |local| show_local("    ", context, unit, frame_base, regs, local),
                             )?;
 
                             frame.print_debuginfo();
@@ -495,5 +431,75 @@ mod example {
                 _ => unimplemented!(),
             }
         }
+    }
+
+    fn show_local<'a>(
+        kind: &str,
+        context: &Context,
+        unit: &gimli::Unit<headcrab::symbol::Reader<'a>>,
+        frame_base: Option<u64>,
+        regs: libc::user_regs_struct,
+        local: headcrab::symbol::Local,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let type_size = if let Some(type_) = local.type_() {
+            if let Some(size) = type_.attr(gimli::DW_AT_byte_size)? {
+                size.udata_value().unwrap()
+            } else if type_.tag() == gimli::DW_TAG_pointer_type {
+                std::mem::size_of::<usize>() as u64 // FIXME use pointer size of remote
+            } else {
+                0
+            }
+        } else {
+            0
+        };
+
+        let value = match local.value() {
+            headcrab::symbol::LocalValue::Expr(expr) => {
+                let res = headcrab::symbol::dwarf_utils::evaluate_expression(
+                    unit,
+                    expr.clone(),
+                    frame_base,
+                    get_linux_x86_64_reg(regs),
+                )?;
+                assert_eq!(res.len(), 1);
+                assert_eq!(res[0].bit_offset, None);
+                assert_eq!(res[0].size_in_bits, None);
+                match res[0].location {
+                    gimli::Location::Address { address } => match type_size {
+                        8 => {
+                            let mut val = 0u64;
+                            unsafe {
+                                context
+                                    .remote()
+                                    .unwrap()
+                                    .read()
+                                    .read(&mut val, address as usize)
+                                    .apply()
+                                    .unwrap();
+                            }
+                            format!("{}", val)
+                        }
+                        _ => unimplemented!("{}", type_size),
+                    },
+                    gimli::Location::Value { value } => match value {
+                        gimli::Value::Generic(val) => format!("{}", val),
+                        val => unimplemented!("{:?}", val),
+                    },
+                    ref loc => unimplemented!("{:?}", loc),
+                }
+            }
+            headcrab::symbol::LocalValue::Const(val) => format!("const {}", val),
+            headcrab::symbol::LocalValue::OptimizedOut => "<optimized out>".to_owned(),
+            headcrab::symbol::LocalValue::Unknown => "<unknown>".to_owned(),
+        };
+
+        println!(
+            "{} {} = {}",
+            kind,
+            local.name()?.unwrap_or("<no name>"),
+            value
+        );
+
+        Ok(())
     }
 }

@@ -77,7 +77,7 @@ impl<T: ?Sized> std::ops::Deref for RcCow<'_, T> {
 unsafe impl<T: ?Sized> gimli::StableDeref for RcCow<'_, T> {}
 unsafe impl<T: ?Sized> gimli::CloneStableDeref for RcCow<'_, T> {}
 
-type Reader<'a> = gimli::EndianReader<gimli::RunTimeEndian, RcCow<'a, [u8]>>;
+pub type Reader<'a> = gimli::EndianReader<gimli::RunTimeEndian, RcCow<'a, [u8]>>;
 
 pub struct ParsedDwarf<'a> {
     object: object::File<'a>,
