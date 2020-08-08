@@ -363,7 +363,7 @@ mod tests {
                     // Parent reads memory
                     thread::sleep(time::Duration::from_millis(300));
 
-                    dealloc(ptr, layout);
+                    std::process::exit(0);
                 }
                 Ok(ForkResult::Parent { child, .. }) => {
                     thread::sleep(time::Duration::from_millis(100));
