@@ -403,7 +403,7 @@ impl RelocatedDwarf {
     pub fn get_symbol_address(&self, name: &str) -> Option<usize> {
         for entry in &self.0 {
             if let Some(addr) = entry.dwarf.get_symbol_address(name) {
-                if addr as u64 + entry.bias >= entry.address_range.1 {
+                if addr as u64 + entry.bias >= entry.address_range.0 + entry.address_range.1 {
                     continue;
                 }
                 return Some(addr + entry.bias as usize);
@@ -414,7 +414,9 @@ impl RelocatedDwarf {
 
     pub fn get_address_symbol_name(&self, addr: usize) -> Option<String> {
         for entry in &self.0 {
-            if (addr as u64) < entry.address_range.0 || addr as u64 >= entry.address_range.1 {
+            if (addr as u64) < entry.address_range.0
+                || addr as u64 >= entry.address_range.0 + entry.address_range.1
+            {
                 continue;
             }
             return entry
@@ -426,7 +428,9 @@ impl RelocatedDwarf {
 
     pub fn get_address_demangled_name(&self, addr: usize) -> Option<String> {
         for entry in &self.0 {
-            if (addr as u64) < entry.address_range.0 || addr as u64 >= entry.address_range.1 {
+            if (addr as u64) < entry.address_range.0
+                || addr as u64 >= entry.address_range.0 + entry.address_range.1
+            {
                 continue;
             }
             return entry
@@ -438,7 +442,9 @@ impl RelocatedDwarf {
 
     pub fn get_address_symbol_kind(&self, addr: usize) -> Option<SymbolKind> {
         for entry in &self.0 {
-            if (addr as u64) < entry.address_range.0 || addr as u64 >= entry.address_range.1 {
+            if (addr as u64) < entry.address_range.0
+                || addr as u64 >= entry.address_range.0 + entry.address_range.1
+            {
                 continue;
             }
             return entry
@@ -451,7 +457,7 @@ impl RelocatedDwarf {
     pub fn get_var_address(&self, name: &str) -> Option<usize> {
         for entry in &self.0 {
             if let Some(addr) = entry.dwarf.get_var_address(name) {
-                if addr as u64 + entry.bias >= entry.address_range.1 {
+                if addr as u64 + entry.bias >= entry.address_range.0 + entry.address_range.1 {
                     continue;
                 }
                 return Some(addr + entry.bias as usize);
@@ -465,7 +471,9 @@ impl RelocatedDwarf {
         addr: usize,
     ) -> Result<Option<(String, u64, u64)>, Box<dyn std::error::Error>> {
         for entry in &self.0 {
-            if (addr as u64) < entry.address_range.0 || addr as u64 >= entry.address_range.1 {
+            if (addr as u64) < entry.address_range.0
+                || addr as u64 >= entry.address_range.0 + entry.address_range.1
+            {
                 continue;
             }
             return Ok(Some(
@@ -480,7 +488,9 @@ impl RelocatedDwarf {
         addr: usize,
     ) -> Result<Option<String>, Box<dyn std::error::Error>> {
         for entry in &self.0 {
-            if (addr as u64) < entry.address_range.0 || addr as u64 >= entry.address_range.1 {
+            if (addr as u64) < entry.address_range.0
+                || addr as u64 >= entry.address_range.0 + entry.address_range.1
+            {
                 continue;
             }
             return Ok(Some(
