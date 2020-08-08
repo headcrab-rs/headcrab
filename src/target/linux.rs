@@ -363,7 +363,7 @@ mod tests {
                     // Parent reads memory
                     thread::sleep(time::Duration::from_millis(300));
 
-                    dealloc(ptr, layout);
+                    std::process::exit(0);
                 }
                 Ok(ForkResult::Parent { child, .. }) => {
                     thread::sleep(time::Duration::from_millis(100));
@@ -420,15 +420,9 @@ mod tests {
             .map(|t| (t.name().unwrap().unwrap().clone(), t.thread_id()))
             .collect();
 
-        // Not always consistent: see https://github.com/rust-lang/rust/issues/74845
-        let cargo_threads = std::env::var("RUST_TEST_THREADS")
-            .map(|s| s.parse::<usize>())
-            .unwrap_or(Ok(2))?;
-
-        // Using >= because we can't trust the cargo_threads number
         assert!(
-            threads.len() >= cargo_threads + 1,
-            "Expected at least 3 threads in {:?}",
+            threads.len() >= 2,
+            "Expected at least 2 threads in {:?}",
             threads
         );
 
