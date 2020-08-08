@@ -8,7 +8,7 @@ use winapi::um::winnt;
 
 /// This structure holds the state of the debuggee on windows systems.
 pub struct Target {
-    process_handle: winnt::HANDLE,
+    proc_handle: winnt::HANDLE,
 }
 
 macro_rules! wide_string {
@@ -23,8 +23,10 @@ macro_rules! wide_string {
 impl Target {
     /// Launch a new debuggee process.
     pub fn launch(path: &str) -> Result<Target, Box<dyn std::error::Error>> {
-        let mut si: STARTUPINFOW = unsafe { mem::zeroed() };
-        let mut pi: PROCESS_INFORMATION = unsafe { mem::zeroed() };
+        let startup_info = mem::MaybeUninit::<STARTUPINFOW>::zeroed();
+        let mut startup_info = unsafe { startup_info.assume_init() };
+        let proc_info = mem::MaybeUninit::<PROCESS_INFORMATION>::zeroed();
+        let mut proc_info = unsafe { proc_info.assume_init() };
 
         if unsafe {
             CreateProcessW(
@@ -36,8 +38,8 @@ impl Target {
                 winbase::DEBUG_ONLY_THIS_PROCESS,
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
-                &mut si,
-                &mut pi,
+                &mut startup_info,
+                &mut proc_info
             )
         } == FALSE
         {
@@ -45,17 +47,17 @@ impl Target {
         }
 
         Ok(Target {
-            process_handle: pi.hProcess,
+            proc_handle: proc_info.hProcess,
         })
     }
 
     /// Attach to a running Process.
     pub fn attach(pid: u32) -> Result<Target, Box<dyn std::error::Error>> {
         let access = winnt::PROCESS_VM_OPERATION | winnt::PROCESS_VM_READ | winnt::PROCESS_VM_WRITE;
-        let process_handle = unsafe { OpenProcess(access, FALSE, pid) };
-        if process_handle == std::ptr::null_mut() {
+        let proc_handle = unsafe { OpenProcess(access, FALSE, pid) };
+        if proc_handle == std::ptr::null_mut() {
             return Err(Box::new(std::io::Error::last_os_error()));
         }
-        Ok(Target { process_handle })
+        Ok(Target { proc_handle })
     }
 }
