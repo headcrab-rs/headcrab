@@ -11,7 +11,7 @@ fn main() {
 #[cfg(target_os = "linux")]
 mod example {
     use headcrab::{
-        symbol::{dwarf_utils::SearchAction, DisassemblySource, RelocatedDwarf},
+        symbol::{DisassemblySource, RelocatedDwarf},
         target::{AttachOptions, LinuxTarget, UnixTarget},
     };
 
@@ -320,41 +320,109 @@ mod example {
                                 println!("                 {} {}", name, location);
                             }
 
-                            let (dwarf, unit, dw_die_offset) = frame
+                            let (_dwarf, unit, dw_die_offset) = frame
                                 .function_debuginfo()
                                 .ok_or_else(|| "No dwarf debuginfo for function".to_owned())?;
-                            let _: Option<()> = headcrab::symbol::dwarf_utils::search_tree(
-                                unit,
-                                Some(dw_die_offset),
-                                |entry, indent| {
-                                    if entry.tag() == gimli::DW_TAG_inlined_subroutine
-                                        && entry.offset() != dw_die_offset
-                                    {
-                                        return Ok(SearchAction::SkipChildren); // Already visited by addr2line frame iter
-                                    }
 
-                                    println!("{:indent$}{}", "", entry.tag(), indent = indent * 2);
+                            // FIXME handle DW_TAG_inlined_subroutine with DW_AT_frame_base in parent DW_TAG_subprogram
+                            let frame_base = if let Some(frame_base) =
+                                unit.entry(dw_die_offset)?.attr(gimli::DW_AT_frame_base)?
+                            {
+                                let frame_base = frame_base.exprloc_value().unwrap();
+                                let res = headcrab::symbol::dwarf_utils::evaluate_expression(
+                                    unit,
+                                    frame_base,
+                                    None,
+                                    get_linux_x86_64_reg(regs),
+                                )?;
+                                assert_eq!(res.len(), 1);
+                                assert_eq!(res[0].bit_offset, None);
+                                assert_eq!(res[0].size_in_bits, None);
+                                Some(match res[0].location {
+                                    gimli::Location::Register {
+                                        register: gimli::X86_64::RBP,
+                                    } => regs.rbp,
+                                    ref loc => unimplemented!("{:?}", loc), // FIXME
+                                })
+                            } else {
+                                None
+                            };
 
-                                    if entry.tag() == gimli::DW_TAG_lexical_block {
-                                        if !headcrab::symbol::dwarf_utils::in_range(
-                                            dwarf,
-                                            &unit,
-                                            Some(&entry),
-                                            func as u64,
-                                        )? {
-                                            println!(
-                                                "{:indent$}skipped",
-                                                "",
-                                                indent = indent * 2 + 2
-                                            );
-                                            return Ok(SearchAction::SkipChildren);
+                            frame.each_local::<Box<dyn std::error::Error>, _>(
+                                func as u64,
+                                |local| {
+                                    let type_size = local
+                                        .type_()
+                                        .map(|type_| type_.attr(gimli::DW_AT_byte_size))
+                                        .transpose()?
+                                        .map(|size| size.unwrap().udata_value().unwrap())
+                                        .unwrap_or(0);
+
+                                    let value = match local.value() {
+                                        headcrab::symbol::LocalValue::Expr(expr) => {
+                                            let res =
+                                                headcrab::symbol::dwarf_utils::evaluate_expression(
+                                                    unit,
+                                                    expr.clone(),
+                                                    frame_base,
+                                                    get_linux_x86_64_reg(regs),
+                                                )?;
+                                            assert_eq!(res.len(), 1);
+                                            assert_eq!(res[0].bit_offset, None);
+                                            assert_eq!(res[0].size_in_bits, None);
+                                            match res[0].location {
+                                                gimli::Location::Address { address } => {
+                                                    match type_size {
+                                                        8 => {
+                                                            let mut val = 0u64;
+                                                            unsafe {
+                                                                context
+                                                                    .remote()
+                                                                    .unwrap()
+                                                                    .read()
+                                                                    .read(
+                                                                        &mut val,
+                                                                        address as usize,
+                                                                    )
+                                                                    .apply()
+                                                                    .unwrap();
+                                                            }
+                                                            format!("{}", val)
+                                                        }
+                                                        _ => unimplemented!("{}", type_size),
+                                                    }
+                                                }
+                                                gimli::Location::Value { value } => match value {
+                                                    gimli::Value::Generic(val) => {
+                                                        format!("{}", val)
+                                                    }
+                                                    val => unimplemented!("{:?}", val),
+                                                },
+                                                ref loc => unimplemented!("{:?}", loc),
+                                            }
                                         }
-                                    }
+                                        headcrab::symbol::LocalValue::Const(val) => {
+                                            format!("const {}", val)
+                                        }
+                                        headcrab::symbol::LocalValue::OptimizedOut => {
+                                            "<optimized out>".to_owned()
+                                        }
+                                        headcrab::symbol::LocalValue::Unknown => {
+                                            "<unknown>".to_owned()
+                                        }
+                                    };
 
-                                    Ok(SearchAction::VisitChildren)
+                                    println!(
+                                        "{} = {}",
+                                        local.name()?.unwrap_or("<no name>"),
+                                        value
+                                    );
+
+                                    Ok(())
                                 },
-                            )
-                            .map_err(|e: Box<dyn std::error::Error>| e)?;
+                            )?;
+
+                            frame.print_debuginfo();
 
                             first_frame = false;
                         }
@@ -408,5 +476,24 @@ mod example {
         }
 
         Ok(())
+    }
+
+    fn get_linux_x86_64_reg(
+        regs: libc::user_regs_struct,
+    ) -> impl Fn(gimli::Register, gimli::ValueType) -> gimli::Value {
+        move |reg, ty| {
+            let val = match reg {
+                gimli::X86_64::RAX => regs.rax,
+                gimli::X86_64::RBX => regs.rbx,
+                gimli::X86_64::RDI => regs.rdi,
+                gimli::X86_64::RBP => regs.rbp,
+                reg => unimplemented!("{:?}", reg), // FIXME
+            };
+            match ty {
+                gimli::ValueType::Generic => gimli::Value::Generic(val),
+                gimli::ValueType::U64 => gimli::Value::U64(val),
+                _ => unimplemented!(),
+            }
+        }
     }
 }
