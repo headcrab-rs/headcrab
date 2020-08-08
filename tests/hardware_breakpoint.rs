@@ -5,10 +5,7 @@ mod test_utils;
 #[cfg(target_os = "linux")]
 use headcrab::{symbol::RelocatedDwarf, target::UnixTarget};
 
-static BIN_PATH: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/tests/testees/hardware_breakpoint"
-);
+static BIN_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/testees/hw_breakpoint");
 
 // FIXME: Running this test just for linux because of privileges issue on macOS. Enable for everything after fixing.
 #[cfg(target_os = "linux")]
