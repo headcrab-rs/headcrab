@@ -107,9 +107,9 @@ impl<'a> Frame<'a> {
                     .map(|type_| unit.entry(type_))
                     .transpose()?;
 
-                let location = if let Some(loc) = entry.attr(gimli::DW_AT_location)? {
+                let value = if let Some(loc) = entry.attr(gimli::DW_AT_location)? {
                     match loc.value() {
-                        gimli::AttributeValue::Exprloc(loc) => Some(loc),
+                        gimli::AttributeValue::Exprloc(loc) => LocalValue::Expr(loc),
                         gimli::AttributeValue::LocationListsRef(loc_list) => {
                             let mut loc_list = dwarf.locations(unit, loc_list)?;
                             let mut loc = None;
@@ -119,19 +119,21 @@ impl<'a> Frame<'a> {
                                     break;
                                 }
                             }
-                            loc
+                            if let Some(loc) = loc {
+                                LocalValue::Expr(loc)
+                            } else {
+                                LocalValue::OptimizedOut
+                            }
                         }
                         val => unreachable!("{:?}", val),
                     }
+                } else if let Some(const_val) = entry.attr(gimli::DW_AT_const_value)? {
+                    LocalValue::Const(const_val.udata_value().unwrap())
                 } else {
-                    None
+                    LocalValue::Unknown
                 };
 
-                f(Local {
-                    name,
-                    type_,
-                    location,
-                })?;
+                f(Local { name, type_, value })?;
             }
 
             Ok(SearchAction::VisitChildren)
@@ -143,7 +145,14 @@ impl<'a> Frame<'a> {
 pub struct Local<'a, 'ctx> {
     name: Option<Reader<'ctx>>,
     type_: Option<gimli::DebuggingInformationEntry<'a, 'a, Reader<'ctx>>>,
-    location: Option<gimli::Expression<Reader<'ctx>>>,
+    value: LocalValue<'ctx>,
+}
+
+pub enum LocalValue<'ctx> {
+    Expr(gimli::Expression<Reader<'ctx>>),
+    Const(u64),
+    OptimizedOut,
+    Unknown,
 }
 
 impl<'a, 'ctx> Local<'a, 'ctx> {
@@ -158,8 +167,8 @@ impl<'a, 'ctx> Local<'a, 'ctx> {
         self.type_.as_ref()
     }
 
-    pub fn location(&'a self) -> Option<&'a gimli::Expression<Reader<'ctx>>> {
-        self.location.as_ref()
+    pub fn value(&'a self) -> &'a LocalValue<'ctx> {
+        &self.value
     }
 }
 
