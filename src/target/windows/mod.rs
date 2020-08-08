@@ -39,7 +39,7 @@ impl Target {
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
                 &mut startup_info,
-                &mut proc_info
+                &mut proc_info,
             )
         } == FALSE
         {
