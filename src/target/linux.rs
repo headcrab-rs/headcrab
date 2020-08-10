@@ -1,3 +1,4 @@
+mod hardware_breakpoint;
 mod memory;
 mod readmem;
 
@@ -13,6 +14,9 @@ use std::{
     io::{BufRead, BufReader},
 };
 
+pub use hardware_breakpoint::{
+    HardwareBreakpoint, HardwareBreakpointError, HardwareBreakpointSize, HardwareBreakpointType,
+};
 pub use readmem::ReadMemory;
 
 lazy_static::lazy_static! {
@@ -71,71 +75,6 @@ pub struct AttachOptions {
     /// Determines whether process will be killed on debugger exit or crash.
     pub kill_on_exit: bool,
 }
-
-#[derive(Debug)]
-pub struct HardwareBreakpoint {
-    pub typ: HardwareBreakpointType,
-    pub addr: usize,
-    pub size: HardwareBreakpointSize,
-}
-
-#[derive(Copy, Clone, Debug)]
-pub enum HardwareBreakpointSize {
-    _1 = 0b00,
-    _2 = 0b01,
-    _4 = 0b11,
-    _8 = 0b10,
-}
-impl HardwareBreakpointSize {
-    pub fn from_usize(size: usize) -> Result<Self, Box<dyn std::error::Error>> {
-        match size {
-            1 => Ok(Self::_1),
-            2 => Ok(Self::_2),
-            4 => Ok(Self::_4),
-            8 => Ok(Self::_8),
-            x => Err(Box::new(HardwareBreakpointError::UnsupportedWatchSize(x))),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub enum HardwareBreakpointType {
-    Execute,
-    Write,
-    Read,
-    ReadWrite,
-}
-
-#[derive(Debug, Clone)]
-pub enum HardwareBreakpointError {
-    NoEmptyWatchpoint,
-    DoesNotExist(usize),
-    UnsupportedPlatform,
-    UnsupportedWatchSize(usize),
-}
-
-impl std::fmt::Display for HardwareBreakpointError {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        let string = match self {
-            HardwareBreakpointError::NoEmptyWatchpoint => {
-                "No unused hardware breakpoints left".to_string()
-            }
-            HardwareBreakpointError::DoesNotExist(index) => format!(
-                "Hardware breakpoint at specified index ({}) does not exist",
-                index
-            ),
-            HardwareBreakpointError::UnsupportedPlatform => {
-                "Hardware breakpoints not supported on this platform".to_string()
-            }
-            HardwareBreakpointError::UnsupportedWatchSize(size) => {
-                format!("Hardware breakpoint size of {} is not supported", size)
-            }
-        };
-        write!(f, "{}", string)
-    }
-}
-
-impl std::error::Error for HardwareBreakpointError {}
 
 impl UnixTarget for LinuxTarget {
     /// Provides the Pid of the debuggee process
@@ -307,7 +246,6 @@ impl LinuxTarget {
         Ok(tasks)
     }
 
-    #[cfg(target_arch = "x86_64")]
     pub fn set_hardware_breakpoint(
         &mut self,
         breakpoint: HardwareBreakpoint,
@@ -320,18 +258,10 @@ impl LinuxTarget {
                 return Err(Box::new(HardwareBreakpointError::NoEmptyWatchpoint));
             };
 
-            let rw_bits: u64 = match breakpoint.typ {
-                HardwareBreakpointType::Execute => 0b00,
-                HardwareBreakpointType::Read => 0b11,
-                HardwareBreakpointType::ReadWrite => 0b11,
-                HardwareBreakpointType::Write => 0b01,
-            } << 16 + index * 4;
-
-            let size_bits: u64 = (breakpoint.size as u64) << (18 + index * 4);
-
+            let rw_bits: u64 = breakpoint.rw_bits(index);
+            let size_bits = breakpoint.size_bits(index);
             let enable_bit: u64 = 1 << (2 * index);
-
-            let bit_mask: u64 = (0b11 << (2 * index)) | (0b1111 << (16 + 4 * index));
+            let bit_mask = HardwareBreakpoint::bit_mask(index);
 
             let mut dr7: u64 =
                 self.ptrace_peekuser((*DEBUG_REG_OFFSET + 7 * 8) as *mut libc::c_void)? as u64;
@@ -346,7 +276,7 @@ impl LinuxTarget {
 
             #[allow(deprecated)]
             unsafe {
-                //Have to use deprecated function because of no alternative for PTRACE_POKEUSER
+                // Have to use deprecated function because of no alternative for PTRACE_POKEUSER
                 ptrace::ptrace(
                     ptrace::Request::PTRACE_POKEUSER,
                     self.pid,
@@ -390,15 +320,15 @@ impl LinuxTarget {
             let mut dr6 =
                 self.ptrace_peekuser((*DEBUG_REG_OFFSET + 6 * 8) as *mut libc::c_void)? as u64;
 
-            let dr7_bit_mask: u32 = (0b11 << (2 * index)) | (0b1111 << (16 + 4 * index));
-            dr7 = dr7 & !(dr7_bit_mask as u64);
+            let dr7_bit_mask: u64 = HardwareBreakpoint::bit_mask(index);
+            dr7 = dr7 & !dr7_bit_mask;
 
-            let dr6_bit_mask: u32 = 1 << index;
-            dr6 = dr6 & !(dr6_bit_mask as u64);
+            let dr6_bit_mask: u64 = 1 << index;
+            dr6 = dr6 & !dr6_bit_mask as u64;
 
             #[allow(deprecated)]
             unsafe {
-                //Have to use deprecated function because of no alternative for PTRACE_POKEUSER
+                // Have to use deprecated function because of no alternative for PTRACE_POKEUSER
                 ptrace::ptrace(
                     ptrace::Request::PTRACE_POKEUSER,
                     self.pid,
@@ -422,17 +352,15 @@ impl LinuxTarget {
     }
 
     pub fn clear_all_hardware_breakpoints(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        {
-            for index in 0..SUPPORTED_HARDWARE_BREAKPOINTS {
-                match self.hardware_breakpoints[index] {
-                    Some(_) => {
-                        self.clear_hardware_breakpoint(index)?;
-                    }
-                    None => (),
-                };
-            }
-            Ok(())
+        for index in 0..SUPPORTED_HARDWARE_BREAKPOINTS {
+            match self.hardware_breakpoints[index] {
+                Some(_) => {
+                    self.clear_hardware_breakpoint(index)?;
+                }
+                None => (),
+            };
         }
+        Ok(())
     }
 
     pub fn is_hardware_breakpoint_triggered(
@@ -446,7 +374,7 @@ impl LinuxTarget {
                 if dr7 & (1 << i) != 0 && self.hardware_breakpoints[i].is_some() {
                     // Clear bit for this breakpoint
                     dr7 &= !(1 << i);
-                    //Have to use deprecated function because of no alternative for PTRACE_POKEUSER
+                    // Have to use deprecated function because of no alternative for PTRACE_POKEUSER
                     #[allow(deprecated)]
                     unsafe {
                         ptrace::ptrace(
