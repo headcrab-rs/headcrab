@@ -1,8 +1,10 @@
+mod hardware_breakpoint;
 mod memory;
 mod readmem;
 
 use crate::target::thread::Thread;
 use crate::target::unix::{self, UnixTarget};
+use nix::sys::ptrace;
 use nix::unistd::{getpid, Pid};
 use procfs::process::{Process, Task};
 use procfs::ProcError;
@@ -12,11 +14,25 @@ use std::{
     io::{BufRead, BufReader},
 };
 
+pub use hardware_breakpoint::{
+    HardwareBreakpoint, HardwareBreakpointError, HardwareBreakpointSize, HardwareBreakpointType,
+};
 pub use readmem::ReadMemory;
 
 lazy_static::lazy_static! {
     static ref PAGE_SIZE: usize = unsafe { libc::sysconf(libc::_SC_PAGESIZE) as usize };
+    #[cfg(target_arch="x86_64")]
+    static ref DEBUG_REG_OFFSET: usize = unsafe {
+        let x = std::mem::zeroed::<libc::user>();
+        (&x.u_debugreg as *const _ as usize) - (&x as *const _ as usize)
+    };
 }
+
+#[cfg(target_arch = "x86_64")]
+const SUPPORTED_HARDWARE_BREAKPOINTS: usize = 4;
+
+#[cfg(not(target_arch = "x86_64"))]
+const SUPPORTED_HARDWARE_BREAKPOINTS: usize = 0;
 
 struct LinuxThread {
     task: Task,
@@ -51,6 +67,7 @@ impl Thread for LinuxThread {
 /// You can use it to read & write debuggee's memory, pause it, set breakpoints, etc.
 pub struct LinuxTarget {
     pid: Pid,
+    hardware_breakpoints: [Option<HardwareBreakpoint>; SUPPORTED_HARDWARE_BREAKPOINTS],
 }
 
 /// This structure is used to pass options to attach
@@ -67,12 +84,19 @@ impl UnixTarget for LinuxTarget {
 }
 
 impl LinuxTarget {
+    fn new(pid: Pid) -> Self {
+        Self {
+            pid,
+            hardware_breakpoints: Default::default(),
+        }
+    }
+
     /// Launches a new debuggee process
     pub fn launch(
         path: &str,
     ) -> Result<(LinuxTarget, nix::sys::wait::WaitStatus), Box<dyn std::error::Error>> {
         let (pid, status) = unix::launch(CString::new(path)?)?;
-        let target = LinuxTarget { pid };
+        let target = LinuxTarget::new(pid);
         target.kill_on_exit()?;
         Ok((target, status))
     }
@@ -83,7 +107,7 @@ impl LinuxTarget {
         options: AttachOptions,
     ) -> Result<(LinuxTarget, nix::sys::wait::WaitStatus), Box<dyn std::error::Error>> {
         let status = unix::attach(pid)?;
-        let target = LinuxTarget { pid };
+        let target = LinuxTarget::new(pid);
 
         if options.kill_on_exit {
             target.kill_on_exit()?;
@@ -94,7 +118,7 @@ impl LinuxTarget {
 
     /// Uses this process as a debuggee.
     pub fn me() -> LinuxTarget {
-        LinuxTarget { pid: getpid() }
+        LinuxTarget::new(getpid())
     }
 
     /// Reads memory from a debuggee process.
@@ -221,6 +245,181 @@ impl LinuxTarget {
 
         Ok(tasks)
     }
+
+    pub fn set_hardware_breakpoint(
+        &mut self,
+        breakpoint: HardwareBreakpoint,
+    ) -> Result<usize, Box<dyn std::error::Error>> {
+        #[cfg(target_arch = "x86_64")]
+        {
+            let index = if let Some(empty) = self.find_empty_watchpoint() {
+                empty
+            } else {
+                return Err(Box::new(HardwareBreakpointError::NoEmptyWatchpoint));
+            };
+
+            let rw_bits: u64 = breakpoint.rw_bits(index);
+            let size_bits = breakpoint.size_bits(index);
+            let enable_bit: u64 = 1 << (2 * index);
+            let bit_mask = HardwareBreakpoint::bit_mask(index);
+
+            let mut dr7: u64 =
+                self.ptrace_peekuser((*DEBUG_REG_OFFSET + 7 * 8) as *mut libc::c_void)? as u64;
+
+            // Check if hardware watchpoint is already used
+            if dr7 & (1 << (2 * index)) != 0 {
+                // Panic for now
+                panic!("Invalid debug register state")
+            }
+
+            dr7 = (dr7 & !bit_mask) | (enable_bit | rw_bits | size_bits);
+
+            #[allow(deprecated)]
+            unsafe {
+                // Have to use deprecated function because of no alternative for PTRACE_POKEUSER
+                ptrace::ptrace(
+                    ptrace::Request::PTRACE_POKEUSER,
+                    self.pid,
+                    (*DEBUG_REG_OFFSET + index * 8) as *mut libc::c_void,
+                    breakpoint.addr as *mut libc::c_void,
+                )?;
+                ptrace::ptrace(
+                    ptrace::Request::PTRACE_POKEUSER,
+                    self.pid,
+                    (*DEBUG_REG_OFFSET + 7 * 8) as *mut libc::c_void,
+                    dr7 as *mut libc::c_void,
+                )?;
+                ptrace::ptrace(
+                    ptrace::Request::PTRACE_POKEUSER,
+                    self.pid,
+                    (*DEBUG_REG_OFFSET + 6 * 8) as *mut libc::c_void,
+                    0 as *mut libc::c_void,
+                )?;
+            }
+
+            self.hardware_breakpoints[index] = Some(breakpoint);
+
+            Ok(index)
+        }
+        #[cfg(not(target_arch = "x86_64"))]
+        Err(Box::new(HardwareBreakpointError::UnsupportedPlatform))
+    }
+
+    pub fn clear_hardware_breakpoint(
+        &mut self,
+        index: usize,
+    ) -> Result<HardwareBreakpoint, Box<dyn std::error::Error>> {
+        #[cfg(target_arch = "x86_64")]
+        {
+            if self.hardware_breakpoints[index].is_none() {
+                return Err(Box::new(HardwareBreakpointError::DoesNotExist(index)));
+            }
+
+            let mut dr7 =
+                self.ptrace_peekuser((*DEBUG_REG_OFFSET + 7 * 8) as *mut libc::c_void)? as u64;
+            let mut dr6 =
+                self.ptrace_peekuser((*DEBUG_REG_OFFSET + 6 * 8) as *mut libc::c_void)? as u64;
+
+            let dr7_bit_mask: u64 = HardwareBreakpoint::bit_mask(index);
+            dr7 = dr7 & !dr7_bit_mask;
+
+            let dr6_bit_mask: u64 = 1 << index;
+            dr6 = dr6 & !dr6_bit_mask as u64;
+
+            #[allow(deprecated)]
+            unsafe {
+                // Have to use deprecated function because of no alternative for PTRACE_POKEUSER
+                ptrace::ptrace(
+                    ptrace::Request::PTRACE_POKEUSER,
+                    self.pid,
+                    (*DEBUG_REG_OFFSET + 7 * 8) as *mut libc::c_void,
+                    dr7 as *mut libc::c_void,
+                )?;
+                ptrace::ptrace(
+                    ptrace::Request::PTRACE_POKEUSER,
+                    self.pid,
+                    (*DEBUG_REG_OFFSET + 6 * 8) as *mut libc::c_void,
+                    dr6 as *mut libc::c_void,
+                )?;
+            }
+
+            let watchpoint = std::mem::replace(&mut self.hardware_breakpoints[index], None);
+            Ok(watchpoint.unwrap())
+        }
+
+        #[cfg(not(target_arch = "x86_64"))]
+        Err(Box::new(HardwareBreakpointError::UnsupportedPlatform))
+    }
+
+    pub fn clear_all_hardware_breakpoints(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        for index in 0..SUPPORTED_HARDWARE_BREAKPOINTS {
+            match self.hardware_breakpoints[index] {
+                Some(_) => {
+                    self.clear_hardware_breakpoint(index)?;
+                }
+                None => (),
+            };
+        }
+        Ok(())
+    }
+
+    pub fn is_hardware_breakpoint_triggered(
+        &self,
+    ) -> Result<Option<usize>, Box<dyn std::error::Error>> {
+        #[cfg(target_arch = "x86_64")]
+        {
+            let mut dr7 = self.ptrace_peekuser((*DEBUG_REG_OFFSET + 6 * 8) as *mut libc::c_void)?;
+
+            for i in 0..SUPPORTED_HARDWARE_BREAKPOINTS {
+                if dr7 & (1 << i) != 0 && self.hardware_breakpoints[i].is_some() {
+                    // Clear bit for this breakpoint
+                    dr7 &= !(1 << i);
+                    // Have to use deprecated function because of no alternative for PTRACE_POKEUSER
+                    #[allow(deprecated)]
+                    unsafe {
+                        ptrace::ptrace(
+                            ptrace::Request::PTRACE_POKEUSER,
+                            self.pid,
+                            (*DEBUG_REG_OFFSET + 6 * 8) as *mut libc::c_void,
+                            dr7 as *mut libc::c_void,
+                        )?;
+                    }
+
+                    return Ok(Some(i));
+                }
+            }
+
+            Ok(None)
+        }
+
+        #[cfg(not(target_arch = "x86_64"))]
+        Err(Box::new(HardwareBreakpointError::UnsupportedPlatform))
+    }
+
+    // Temporary function until ptrace_peekuser is fixed in nix crate
+    #[cfg(target_arch = "x86_64")]
+    fn ptrace_peekuser(
+        &self,
+        addr: *mut libc::c_void,
+    ) -> Result<libc::c_long, Box<dyn std::error::Error>> {
+        let ret = unsafe {
+            nix::errno::Errno::clear();
+            libc::ptrace(
+                ptrace::Request::PTRACE_PEEKUSER as libc::c_uint,
+                libc::pid_t::from(self.pid),
+                addr,
+                std::ptr::null_mut() as *mut libc::c_void,
+            )
+        };
+        match nix::errno::Errno::result(ret) {
+            Ok(..) | Err(nix::Error::Sys(nix::errno::Errno::UnknownErrno)) => Ok(ret),
+            Err(err) => Err(Box::new(err)),
+        }
+    }
+
+    fn find_empty_watchpoint(&self) -> Option<usize> {
+        self.hardware_breakpoints.iter().position(|w| w.is_none())
+    }
 }
 
 /// Returns the start of a process's virtual memory address range.
@@ -263,7 +462,7 @@ mod tests {
         let mut read_var2_op: u8 = 0;
 
         unsafe {
-            let target = LinuxTarget { pid: getpid() };
+            let target = LinuxTarget::new(getpid());
             ReadMemory::new(&target)
                 .read(&mut read_var_op, &var as *const _ as usize)
                 .read(&mut read_var2_op, &var2 as *const _ as usize)
