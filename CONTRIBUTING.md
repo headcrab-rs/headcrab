@@ -28,7 +28,7 @@ And remember, there is no such thing as a dumb question!
 Lastly, we have a dedicated [#learning](https://headcrab.zulipchat.com/#narrow/stream/248039-learning) stream on our Zulip chat where you can ask
 questions and find more educational resources.
 
-## Conding Guidelines
+## Coding Guidelines
 
 Currently, Headcrab is intended to work with the current stable version of Rust, but some components might require using `nightly` in the future.
 
