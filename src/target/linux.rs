@@ -418,7 +418,7 @@ mod tests {
         let threads: Vec<_> = threads
             .iter()
             .map(|t| {
-                let name = t.name().unwrap().unwrap_or("".to_string());
+                let name = t.name().unwrap().unwrap_or_else(String::new);
                 let id = t.thread_id();
                 (name, id)
             })
