@@ -1,3 +1,5 @@
+use std::fmt;
+
 use super::dwarf_utils::SearchAction;
 use super::*;
 
@@ -118,11 +120,40 @@ pub struct Local<'a, 'ctx> {
     value: LocalValue<'ctx>,
 }
 
+impl fmt::Debug for Local<'_, '_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Local")
+            .field(
+                "name",
+                &self
+                    .name
+                    .as_ref()
+                    .and_then(|n| n.to_slice().ok())
+                    .as_deref()
+                    .map(String::from_utf8_lossy),
+            )
+            .field("type_", &"...")
+            .field("values", &self.value)
+            .finish()
+    }
+}
+
 pub enum LocalValue<'ctx> {
     Expr(gimli::Expression<Reader<'ctx>>),
     Const(u64),
     OptimizedOut,
     Unknown,
+}
+
+impl fmt::Debug for LocalValue<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            LocalValue::Expr(expr) => write!(f, "Expr({:?})", expr.0.to_slice()),
+            LocalValue::Const(c) => write!(f, "Const({})", c),
+            LocalValue::OptimizedOut => f.write_str("OptimizedOut"),
+            LocalValue::Unknown => f.write_str("Unknown"),
+        }
+    }
 }
 
 impl<'a, 'ctx> Local<'a, 'ctx> {
