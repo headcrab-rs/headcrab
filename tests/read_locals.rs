@@ -136,6 +136,7 @@ fn read_locals() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+#[cfg(target_os = "linux")]
 fn get_linux_x86_64_reg(
     regs: libc::user_regs_struct,
 ) -> impl Fn(gimli::Register, gimli::ValueType) -> gimli::Value {
