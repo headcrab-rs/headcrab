@@ -421,8 +421,19 @@ mod example {
             let val = match reg {
                 gimli::X86_64::RAX => regs.rax,
                 gimli::X86_64::RBX => regs.rbx,
+                gimli::X86_64::RCX => regs.rcx,
+                gimli::X86_64::RDX => regs.rdx,
+                gimli::X86_64::RSI => regs.rsi,
                 gimli::X86_64::RDI => regs.rdi,
+                gimli::X86_64::RSP => regs.rsp,
                 gimli::X86_64::RBP => regs.rbp,
+                gimli::X86_64::R9 => regs.r9,
+                gimli::X86_64::R10 => regs.r10,
+                gimli::X86_64::R11 => regs.r11,
+                gimli::X86_64::R12 => regs.r12,
+                gimli::X86_64::R13 => regs.r13,
+                gimli::X86_64::R14 => regs.r14,
+                gimli::X86_64::R15 => regs.r15,
                 reg => unimplemented!("{:?}", reg), // FIXME
             };
             match ty {
