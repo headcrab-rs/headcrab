@@ -222,15 +222,55 @@ mod example {
                     Some(sub) => Err(format!("Unknown `bt` subcommand `{}`", sub))?,
                 };
                 for func in call_stack {
-                    println!(
-                        "{:016x} {}",
-                        func,
-                        context
-                            .debuginfo()
-                            .get_address_demangled_name(func)
-                            .as_deref()
-                            .unwrap_or("<unknown>")
-                    );
+                    let res = context
+                        .debuginfo()
+                        .with_addr_frames(func, |_addr, mut frames| {
+                            let mut first_frame = true;
+                            while let Some(frame) = frames.next()? {
+                                let name = frame
+                                    .function
+                                    .as_ref()
+                                    .map(|f| Ok(f.demangle()?.into_owned()))
+                                    .transpose()
+                                    .map_err(|err: gimli::Error| err)?
+                                    .unwrap_or_else(|| "<unknown>".to_string());
+
+                                let location = frame
+                                    .location
+                                    .as_ref()
+                                    .map(|loc| {
+                                        format!(
+                                            "{}:{}",
+                                            loc.file.unwrap_or("<unknown file>"),
+                                            loc.line.unwrap_or(0),
+                                        )
+                                    })
+                                    .unwrap_or_default();
+
+                                if first_frame {
+                                    println!("{:016x} {} {}", func, name, location);
+                                } else {
+                                    println!("                 {} {}", name, location);
+                                }
+
+                                first_frame = false;
+                            }
+                            Ok(first_frame)
+                        })?;
+                    match res {
+                        Some(true) | None => {
+                            println!(
+                                "{:016x} at {}",
+                                func,
+                                context
+                                    .debuginfo()
+                                    .get_address_demangled_name(func)
+                                    .as_deref()
+                                    .unwrap_or("<unknown>")
+                            );
+                        }
+                        Some(false) => {}
+                    }
                 }
             }
             Some("dis") | Some("disassemble") => {
@@ -245,6 +285,92 @@ mod example {
                 }
                 let disassembly = context.disassembler.source_snippet(&code, ip, true)?;
                 println!("{}", disassembly);
+            }
+            Some("locals") => {
+                let regs = context.remote()?.read_regs()?;
+                let func = regs.rip as usize;
+                let res = context.debuginfo().with_addr_frames(
+                    func,
+                    |func, mut frames: headcrab::symbol::FrameIter| {
+                        let mut first_frame = true;
+                        while let Some(frame) = frames.next()? {
+                            let name = frame
+                                .function
+                                .as_ref()
+                                .map(|f| Ok(f.demangle()?.into_owned()))
+                                .transpose()
+                                .map_err(|err: gimli::Error| err)?
+                                .unwrap_or_else(|| "<unknown>".to_string());
+
+                            let location = frame
+                                .location
+                                .as_ref()
+                                .map(|loc| {
+                                    format!(
+                                        "{}:{}",
+                                        loc.file.unwrap_or("<unknown file>"),
+                                        loc.line.unwrap_or(0),
+                                    )
+                                })
+                                .unwrap_or_default();
+
+                            if first_frame {
+                                println!("{:016x} {} {}", func, name, location);
+                            } else {
+                                println!("                 {} {}", name, location);
+                            }
+
+                            let (_dwarf, unit, dw_die_offset) = frame
+                                .function_debuginfo()
+                                .ok_or_else(|| "No dwarf debuginfo for function".to_owned())?;
+
+                            // FIXME handle DW_TAG_inlined_subroutine with DW_AT_frame_base in parent DW_TAG_subprogram
+                            let frame_base = if let Some(frame_base) =
+                                unit.entry(dw_die_offset)?.attr(gimli::DW_AT_frame_base)?
+                            {
+                                let frame_base = frame_base.exprloc_value().unwrap();
+                                let res = headcrab::symbol::dwarf_utils::evaluate_expression(
+                                    unit,
+                                    frame_base,
+                                    None,
+                                    get_linux_x86_64_reg(regs),
+                                )?;
+                                assert_eq!(res.len(), 1);
+                                assert_eq!(res[0].bit_offset, None);
+                                assert_eq!(res[0].size_in_bits, None);
+                                Some(match res[0].location {
+                                    gimli::Location::Register {
+                                        register: gimli::X86_64::RBP,
+                                    } => regs.rbp,
+                                    ref loc => unimplemented!("{:?}", loc), // FIXME
+                                })
+                            } else {
+                                None
+                            };
+
+                            frame.each_argument::<Box<dyn std::error::Error>, _>(
+                                func as u64,
+                                |local| show_local("arg", context, unit, frame_base, regs, local),
+                            )?;
+
+                            frame.each_local::<Box<dyn std::error::Error>, _>(
+                                func as u64,
+                                |local| show_local("    ", context, unit, frame_base, regs, local),
+                            )?;
+
+                            frame.print_debuginfo();
+
+                            first_frame = false;
+                        }
+                        Ok(first_frame)
+                    },
+                )?;
+                match res {
+                    Some(true) | None => {
+                        println!("no locals");
+                    }
+                    Some(false) => {}
+                }
             }
 
             // Patch the `pause` instruction inside a function called `breakpoint` to be a
@@ -284,6 +410,106 @@ mod example {
             Some("") | None => {}
             Some(command) => Err(format!("Unknown command `{}`", command))?,
         }
+
+        Ok(())
+    }
+
+    fn get_linux_x86_64_reg(
+        regs: libc::user_regs_struct,
+    ) -> impl Fn(gimli::Register, gimli::ValueType) -> gimli::Value {
+        move |reg, ty| {
+            let val = match reg {
+                gimli::X86_64::RAX => regs.rax,
+                gimli::X86_64::RBX => regs.rbx,
+                gimli::X86_64::RCX => regs.rcx,
+                gimli::X86_64::RDX => regs.rdx,
+                gimli::X86_64::RSI => regs.rsi,
+                gimli::X86_64::RDI => regs.rdi,
+                gimli::X86_64::RSP => regs.rsp,
+                gimli::X86_64::RBP => regs.rbp,
+                gimli::X86_64::R9 => regs.r9,
+                gimli::X86_64::R10 => regs.r10,
+                gimli::X86_64::R11 => regs.r11,
+                gimli::X86_64::R12 => regs.r12,
+                gimli::X86_64::R13 => regs.r13,
+                gimli::X86_64::R14 => regs.r14,
+                gimli::X86_64::R15 => regs.r15,
+                reg => unimplemented!("{:?}", reg), // FIXME
+            };
+            match ty {
+                gimli::ValueType::Generic => gimli::Value::Generic(val),
+                gimli::ValueType::U64 => gimli::Value::U64(val),
+                _ => unimplemented!(),
+            }
+        }
+    }
+
+    fn show_local<'a>(
+        kind: &str,
+        context: &Context,
+        unit: &gimli::Unit<headcrab::symbol::Reader<'a>>,
+        frame_base: Option<u64>,
+        regs: libc::user_regs_struct,
+        local: headcrab::symbol::Local,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let type_size = if let Some(type_) = local.type_() {
+            if let Some(size) = type_.attr(gimli::DW_AT_byte_size)? {
+                size.udata_value().unwrap()
+            } else if type_.tag() == gimli::DW_TAG_pointer_type {
+                std::mem::size_of::<usize>() as u64 // FIXME use pointer size of remote
+            } else {
+                0
+            }
+        } else {
+            0
+        };
+
+        let value = match local.value() {
+            headcrab::symbol::LocalValue::Expr(expr) => {
+                let res = headcrab::symbol::dwarf_utils::evaluate_expression(
+                    unit,
+                    expr.clone(),
+                    frame_base,
+                    get_linux_x86_64_reg(regs),
+                )?;
+                assert_eq!(res.len(), 1);
+                assert_eq!(res[0].bit_offset, None);
+                assert_eq!(res[0].size_in_bits, None);
+                match res[0].location {
+                    gimli::Location::Address { address } => match type_size {
+                        8 => {
+                            let mut val = 0u64;
+                            unsafe {
+                                context
+                                    .remote()
+                                    .unwrap()
+                                    .read()
+                                    .read(&mut val, address as usize)
+                                    .apply()
+                                    .unwrap();
+                            }
+                            format!("{}", val)
+                        }
+                        _ => unimplemented!("{}", type_size),
+                    },
+                    gimli::Location::Value { value } => match value {
+                        gimli::Value::Generic(val) => format!("{}", val),
+                        val => unimplemented!("{:?}", val),
+                    },
+                    ref loc => unimplemented!("{:?}", loc),
+                }
+            }
+            headcrab::symbol::LocalValue::Const(val) => format!("const {}", val),
+            headcrab::symbol::LocalValue::OptimizedOut => "<optimized out>".to_owned(),
+            headcrab::symbol::LocalValue::Unknown => "<unknown>".to_owned(),
+        };
+
+        println!(
+            "{} {} = {}",
+            kind,
+            local.name()?.unwrap_or("<no name>"),
+            value
+        );
 
         Ok(())
     }

@@ -22,7 +22,7 @@ fn attach_readmem() -> Result<(), Box<dyn std::error::Error>> {
     let debuginfo = Dwarf::new(BIN_PATH)?;
 
     let str_addr = debuginfo
-        .get_var_address("STATICVAR")
+        .get_var_address("STATICVAR")?
         .expect("Expected static var has not been found in the target binary");
 
     match fork()? {
