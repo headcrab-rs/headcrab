@@ -1,9 +1,12 @@
-// This module provides a naive implementation of symbolication for the time being.
-// It should be expanded to support multiple data sources.
+//! This module provides a naive implementation of symbolication for the time being.
+//! It should be expanded to support multiple data sources.
+
+pub mod dwarf_utils;
+pub mod unwind;
 
 use gimli::read::{EvaluationResult, Reader as _};
 use object::{
-    read::{Object, ObjectSection, ObjectSegment, Symbol},
+    read::{Object, ObjectSection, ObjectSegment},
     SymbolKind,
 };
 use std::{
@@ -11,8 +14,17 @@ use std::{
     collections::{BTreeMap, HashMap},
     fs::File,
     path::Path,
-    rc::Rc,
 };
+pub use sym::Symbol;
+
+mod frame;
+mod relocate;
+mod source;
+mod sym;
+
+pub use frame::{Frame, FrameIter, Local, LocalValue};
+pub use relocate::RelocatedDwarf;
+pub use source::DisassemblySource;
 
 macro_rules! dwarf_attr_or_continue {
     (str($dwarf:ident,$unit:ident) $entry:ident.$name:ident) => {
@@ -29,11 +41,18 @@ macro_rules! dwarf_attr_or_continue {
     };
 }
 
-#[derive(Debug)]
-enum RcCow<'a, T: ?Sized> {
-    Owned(Rc<T>),
-    Borrowed(&'a T),
+mod rc_cow {
+    use std::rc::Rc;
+
+    // Avoid private-in-public error by making this public.
+    #[derive(Debug)]
+    pub enum RcCow<'a, T: ?Sized> {
+        Owned(Rc<T>),
+        Borrowed(&'a T),
+    }
 }
+
+use rc_cow::RcCow;
 
 impl<T: ?Sized> Clone for RcCow<'_, T> {
     fn clone(&self) -> Self {
@@ -58,14 +77,20 @@ impl<T: ?Sized> std::ops::Deref for RcCow<'_, T> {
 unsafe impl<T: ?Sized> gimli::StableDeref for RcCow<'_, T> {}
 unsafe impl<T: ?Sized> gimli::CloneStableDeref for RcCow<'_, T> {}
 
-type Reader<'a> = gimli::EndianReader<gimli::RunTimeEndian, RcCow<'a, [u8]>>;
+pub type Reader<'a> = gimli::EndianReader<gimli::RunTimeEndian, RcCow<'a, [u8]>>;
 
 pub struct ParsedDwarf<'a> {
     object: object::File<'a>,
-    dwarf: gimli::Dwarf<Reader<'a>>,
-    vars: BTreeMap<String, usize>,
+    addr2line: addr2line::Context<Reader<'a>>,
+    vars: BTreeMap<
+        String,
+        (
+            gimli::CompilationUnitHeader<Reader<'a>>,
+            gimli::Expression<Reader<'a>>,
+        ),
+    >,
     symbols: Vec<Symbol<'a>>,
-    symbol_names: HashMap<&'a str, usize>,
+    symbol_names: HashMap<String, usize>,
 }
 
 impl<'a> ParsedDwarf<'a> {
@@ -104,27 +129,23 @@ impl<'a> ParsedDwarf<'a> {
         // Create `EndianSlice`s for all of the sections.
         let dwarf = gimli::Dwarf::load(loader, sup_loader)?;
 
+        let addr2line = addr2line::Context::from_dwarf(dwarf)?;
+        let dwarf = addr2line.dwarf();
+
         let mut units = dwarf.units();
 
         let mut vars = BTreeMap::new();
         while let Some(header) = units.next()? {
-            let unit = dwarf.unit(header)?;
+            let unit = dwarf.unit(header.clone())?;
             let mut entries = unit.entries();
             while let Some((_, entry)) = entries.next_dfs()? {
                 if entry.tag() == gimli::DW_TAG_variable {
                     let name =
                         dwarf_attr_or_continue!(str(dwarf, unit) entry.DW_AT_name).into_owned();
-                    let expr = dwarf_attr_or_continue!(entry.DW_AT_location).exprloc_value();
-
-                    // TODO: evaluation should not happen here
-                    if let Some(expr) = expr {
-                        let mut eval = expr.evaluation(unit.encoding());
-                        match eval.evaluate()? {
-                            EvaluationResult::RequiresRelocatedAddress(reloc_addr) => {
-                                vars.insert(name.to_owned(), reloc_addr as usize);
-                            }
-                            _ev_res => {} // do nothing for now
-                        }
+                    if let Some(expr) =
+                        dwarf_attr_or_continue!(entry.DW_AT_location).exprloc_value()
+                    {
+                        vars.insert(name, (header.clone(), expr));
                     }
                 }
             }
@@ -146,23 +167,22 @@ impl<'a> ParsedDwarf<'a> {
                         return false;
                     }
                 }
-                !symbol.is_undefined()
-                    && symbol.section() != object::SymbolSection::Common
-                    && symbol.size() > 0
+                !symbol.is_undefined() && symbol.section() != object::SymbolSection::Common
             })
+            .map(Into::into)
             .collect();
-        symbols.sort_by_key(|sym| sym.address());
+        symbols.sort_by_key(|sym: &Symbol| sym.address());
 
         let mut symbol_names = HashMap::new();
         for sym in &symbols {
-            if let Some(name) = sym.name() {
-                symbol_names.insert(name, sym.address() as usize);
+            if let Some(name) = sym.demangled_name() {
+                symbol_names.insert(name.to_string(), sym.address() as usize);
             }
         }
 
         Ok(ParsedDwarf {
             object,
-            dwarf,
+            addr2line,
             vars,
             symbols,
             symbol_names,
@@ -173,7 +193,7 @@ impl<'a> ParsedDwarf<'a> {
         self.symbol_names.get(name).copied()
     }
 
-    pub fn get_address_symbol(&self, addr: usize) -> Option<String> {
+    pub fn get_address_symbol(&self, addr: usize) -> Option<Symbol<'a>> {
         let index = match self
             .symbols
             .binary_search_by(|sym| sym.address().cmp(&(addr as u64)))
@@ -189,7 +209,7 @@ impl<'a> ParsedDwarf<'a> {
         if self.symbols.get(index + 1).map(|sym| sym.address()) <= Some(addr as u64) {
             return None;
         }
-        Some(symbol.name()?.to_string())
+        Some(symbol.clone())
 
         // FIXME `size` is wrong in some cases. Once this is solved use the following instead.
         /*
@@ -206,8 +226,29 @@ impl<'a> ParsedDwarf<'a> {
         */
     }
 
-    pub fn get_var_address(&self, name: &str) -> Option<usize> {
-        self.vars.get(name).cloned()
+    pub fn get_var_address(&self, name: &str) -> Result<Option<usize>, Box<dyn std::error::Error>> {
+        if let Some((unit_header, expr)) = self.vars.get(name) {
+            let unit = self.addr2line.dwarf().unit(unit_header.clone())?;
+            let mut eval = expr.clone().evaluation(unit.encoding());
+            match eval.evaluate()? {
+                EvaluationResult::RequiresRelocatedAddress(reloc_addr) => {
+                    return Ok(Some(reloc_addr as usize));
+                }
+                _ev_res => {} // do nothing for now
+            }
+        }
+        Ok(None)
+    }
+
+    pub fn get_addr_frames(
+        &'a self,
+        addr: usize,
+    ) -> Result<FrameIter<'a>, Box<dyn std::error::Error>> {
+        Ok(FrameIter {
+            dwarf: self.addr2line.dwarf(),
+            unit: self.addr2line.find_dwarf_unit(addr as u64),
+            iter: self.addr2line.find_frames(addr as u64)?,
+        })
     }
 }
 
@@ -251,8 +292,12 @@ mod inner {
             })
         }
 
-        pub fn rent<T>(&self, f: impl for<'a> FnOnce(&ParsedDwarf<'a>) -> T) -> T {
-            f(&*self.parsed)
+        pub fn rent<T>(&self, f: impl for<'a> FnOnce(&'a ParsedDwarf<'a>) -> T) -> T {
+            // Safety: `ParsedDwarf` is invariant in `'a`. This means that `ParsedDwarf<'static>`
+            // can't safely turn into `ParsedDwarf<'a>`, as otherwise it would be possible to put a
+            // short living reference into `ParsedDwarf`. However because of the `for<'a>` on
+            // `FnOnce`, this is prevented, so the transmute here is safe.
+            f(unsafe { mem::transmute::<&ParsedDwarf<'static>, &ParsedDwarf<'_>>(&*self.parsed) })
         }
     }
 
@@ -272,140 +317,37 @@ impl Dwarf {
         self.rent(|parsed| parsed.get_symbol_address(name))
     }
 
-    pub fn get_address_symbol(&self, addr: usize) -> Option<String> {
-        self.rent(|parsed| parsed.get_address_symbol(addr))
+    pub fn get_address_symbol_name(&self, addr: usize) -> Option<String> {
+        self.rent(|parsed| Some(parsed.get_address_symbol(addr)?.name()?.to_string()))
     }
 
-    pub fn get_var_address(&self, name: &str) -> Option<usize> {
+    pub fn get_address_demangled_name(&self, addr: usize) -> Option<String> {
+        self.rent(|parsed| {
+            Some(
+                parsed
+                    .get_address_symbol(addr)?
+                    .demangled_name()?
+                    .to_string(),
+            )
+        })
+    }
+
+    pub fn get_address_symbol_kind(&self, addr: usize) -> Option<SymbolKind> {
+        self.rent(|parsed| Some(parsed.get_address_symbol(addr)?.kind()))
+    }
+
+    pub fn get_var_address(&self, name: &str) -> Result<Option<usize>, Box<dyn std::error::Error>> {
         self.rent(|parsed| parsed.get_var_address(name))
     }
-}
 
-pub struct RelocatedDwarf(Vec<RelocatedDwarfEntry>);
-
-struct RelocatedDwarfEntry {
-    address_range: (u64, u64),
-    file_range: (u64, u64),
-    bias: u64,
-    dwarf: Dwarf,
-}
-
-impl std::fmt::Debug for RelocatedDwarfEntry {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RelocatedDwarfEntry")
-            .field(
-                "address_range",
-                &format!(
-                    "{:016x}..{:016x}",
-                    self.address_range.0, self.address_range.1
-                ),
-            )
-            .field(
-                "file_range",
-                &format!("{:016x}..{:016x}", self.file_range.0, self.file_range.1),
-            )
-            .field("bias", &format!("{:016x}", self.bias))
-            .field(
-                "stated_range",
-                &format!(
-                    "{:016x}..{:016x}",
-                    self.address_range.0 - self.bias,
-                    self.address_range.1 - self.bias
-                ),
-            )
-            .finish()
-    }
-}
-
-impl RelocatedDwarfEntry {
-    fn from_file_and_offset(
-        address: (u64, u64),
-        file: &Path,
-        offset: u64,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
-        match Dwarf::new(file) {
-            Ok(dwarf) => {
-                let (file_range, stated_address) = dwarf
-                    .rent(|parsed| {
-                        let object: &object::File = &parsed.object;
-                        object.segments().find_map(|segment: object::Segment| {
-                            // Sometimes the offset is just before the start file offset of the segment.
-                            if offset <= segment.file_range().0 {
-                                Some((
-                                    segment.file_range(),
-                                    segment.address() - (segment.file_range().0 - offset),
-                                ))
-                            } else {
-                                None
-                            }
-                        })
-                    })
-                    .ok_or_else(|| {
-                        format!(
-                            "Couldn't find segment for `{}`+0x{:x}",
-                            file.display(),
-                            offset
-                        )
-                    })?;
-                Ok(RelocatedDwarfEntry {
-                    address_range: address,
-                    file_range,
-                    bias: address.0 - stated_address,
-                    dwarf,
-                })
-            }
-            Err(err) => Err(err),
-        }
-    }
-}
-
-impl RelocatedDwarf {
-    pub fn from_maps(
-        maps: &[crate::target::MemoryMap],
-    ) -> Result<Self, Box<dyn std::error::Error>> {
-        let vec: Result<Vec<_>, _> = maps
-            .iter()
-            .filter_map(|map| {
-                map.backing_file.as_ref().map(|&(ref file, offset)| {
-                    RelocatedDwarfEntry::from_file_and_offset(map.address, file, offset)
-                })
-            })
-            .collect();
-        let vec = vec?;
-        Ok(RelocatedDwarf(vec))
-    }
-
-    pub fn get_symbol_address(&self, name: &str) -> Option<usize> {
-        for entry in &self.0 {
-            if let Some(addr) = entry.dwarf.get_symbol_address(name) {
-                if addr as u64 + entry.bias >= entry.address_range.1 {
-                    continue;
-                }
-                return Some(addr + entry.bias as usize);
-            }
-        }
-        None
-    }
-
-    pub fn get_address_symbol(&self, addr: usize) -> Option<String> {
-        for entry in &self.0 {
-            if (addr as u64) < entry.address_range.0 || addr as u64 >= entry.address_range.1 {
-                continue;
-            }
-            return entry.dwarf.get_address_symbol(addr - entry.bias as usize);
-        }
-        None
-    }
-
-    pub fn get_var_address(&self, name: &str) -> Option<usize> {
-        for entry in &self.0 {
-            if let Some(addr) = entry.dwarf.get_var_address(name) {
-                if addr as u64 + entry.bias >= entry.address_range.1 {
-                    continue;
-                }
-                return Some(addr + entry.bias as usize);
-            }
-        }
-        None
+    pub fn with_addr_frames<
+        T,
+        F: for<'a> FnOnce(usize, FrameIter<'a>) -> Result<T, Box<dyn std::error::Error>>,
+    >(
+        &self,
+        addr: usize,
+        f: F,
+    ) -> Result<T, Box<dyn std::error::Error>> {
+        self.rent(|parsed| f(addr, parsed.get_addr_frames(addr)?))
     }
 }

@@ -1,26 +1,29 @@
 [package]
 name = "headcrab"
-version = "0.1.0"
-authors = ["Nikita Baksalyar <nikita.baksalyar@gmail.com>"]
+version = "0.2.0"
+authors = ["Headcrab Contributors"]
 edition = "2018"
 description = "A modern Rust debugging library."
-repository = "https://github.com/nbaksalyar/headcrab/"
+repository = "https://github.com/headcrab-rs/headcrab/"
 license = "MIT OR Apache-2.0"
 categories = ["development-tools::debugging"]
 documentation = "https://docs.rs/headcrab"
+homepage = "https://headcrab.rs/"
 readme = "README.md"
 
 [dependencies]
-nix = "0.17.0"
-libproc = "0.7.2"
-libc = "0.2.72"
-object = "0.20"
 lazy_static = "1.4.0"
+object = "0.20"
+gimli = "0.22.0"
+capstone = "0.7.0"
+addr2line = "0.13.0"
 
 # Dependencies specific to macOS & Linux
 [target.'cfg(unix)'.dependencies]
-gimli = "0.22.0"
 memmap = "0.7.0"
+nix = "0.17.0"
+libproc = "0.7.2"
+libc = "0.2.72"
 
 # Dependencies specific to macOS
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
@@ -30,6 +33,9 @@ security-framework-sys = "1.0"
 # Dependencies specific to Linux
 [target.'cfg(target_os="linux")'.dependencies]
 procfs = "0.8.0"
+
+[target.'cfg(target_os="windows")'.dependencies]
+winapi = { version = "0.3.9", features = ["winuser","processthreadsapi","winbase","minwinbase","debugapi","winnt","memoryapi","dbghelp"] }
 
 [dev-dependencies]
 rustyline = "6.2.0"

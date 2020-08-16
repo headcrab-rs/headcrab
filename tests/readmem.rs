@@ -32,14 +32,14 @@ fn read_memory() -> Result<(), Box<dyn std::error::Error>> {
     // Test that the address of `a_function` and one byte further both resolves back to that symbol.
     assert_eq!(
         debuginfo
-            .get_address_symbol(breakpoint_addr.unwrap())
+            .get_address_symbol_name(breakpoint_addr.unwrap())
             .as_ref()
             .map(|name| &**name),
         Some("breakpoint")
     );
     assert_eq!(
         debuginfo
-            .get_address_symbol(breakpoint_addr.unwrap() + 1)
+            .get_address_symbol_name(breakpoint_addr.unwrap() + 1)
             .as_ref()
             .map(|name| &**name),
         Some("breakpoint")
@@ -47,48 +47,34 @@ fn read_memory() -> Result<(), Box<dyn std::error::Error>> {
 
     // Test that invalid addresses don't resolve to a symbol.
     assert_eq!(
-        debuginfo.get_address_symbol(0).as_ref().map(|name| &**name),
-        None,
-    );
-
-    assert_eq!(
         debuginfo
-            .get_address_symbol(0xffff_ffff_ffff_ffff)
+            .get_address_symbol_name(0)
             .as_ref()
             .map(|name| &**name),
         None,
     );
 
-    // Write breakpoint to the `breakpoint` function.
-    let mut pause_inst = 0 as libc::c_ulong;
-    unsafe {
-        target
-            .read()
-            .read(&mut pause_inst, breakpoint_addr.unwrap())
-            .apply()?;
-    }
-    // pause (rep nop); ...
-    assert_eq!(&pause_inst.to_ne_bytes()[0..2], &[0xf3, 0x90]);
-    let mut breakpoint_inst = pause_inst.to_ne_bytes();
-    // int3; nop; ...
-    breakpoint_inst[0] = 0xcc;
-    nix::sys::ptrace::write(
-        target.pid(),
-        breakpoint_addr.unwrap() as *mut _,
-        libc::c_ulong::from_ne_bytes(breakpoint_inst) as *mut _,
-    )?;
+    assert_eq!(
+        debuginfo
+            .get_address_symbol_name(0xffff_ffff_ffff_ffff)
+            .as_ref()
+            .map(|name| &**name),
+        None,
+    );
+
+    test_utils::patch_breakpoint(&target, &debuginfo);
 
     // Wait for the breakpoint to get hit.
     target.unpause().unwrap();
 
     let ip = target.read_regs().unwrap().rip;
     assert_eq!(
-        debuginfo.get_address_symbol(ip as usize).as_deref(),
+        debuginfo.get_address_symbol_name(ip as usize).as_deref(),
         Some("breakpoint")
     );
 
     let str_addr = debuginfo
-        .get_var_address("STATICVAR")
+        .get_var_address("STATICVAR")?
         .expect("Expected static var has not been found in the target binary");
 
     // Read pointer
