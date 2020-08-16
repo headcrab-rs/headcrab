@@ -57,13 +57,16 @@ impl Thread for OSXThread {
             let mut name = [0 as libc::c_char; MAX_THREAD_NAME];
             let name_ptr = &mut name as *mut [libc::c_char] as *mut libc::c_char;
             let get_name = unsafe { libc::pthread_getname_np(pt_id, name_ptr, MAX_THREAD_NAME) };
-            if get_name == 0 {
-                let opt_name = unsafe { CStr::from_ptr(name_ptr) }
-                    .to_str()
-                    .map(|s| s.to_owned())
-                    .ok();
-                return Ok(opt_name);
-            }
+            return if get_name == 0 {
+                let name = unsafe { CStr::from_ptr(name_ptr) }.to_str()?.to_owned();
+                Ok(Some(name))
+            } else {
+                Err(format!(
+                    "Failure to read pthread {} name. Error: {}",
+                    pt_id, get_name
+                )
+                .into())
+            };
         };
         Ok(None)
     }
@@ -193,7 +196,7 @@ impl Target {
                 let port = unsafe { *threads.add(i) };
                 let pthread_id = match unsafe { pthread_from_mach_thread_np(port) } {
                     0 => None,
-                    id => Some(id)
+                    id => Some(id),
                 };
                 let task_port = self.port;
                 let thread = Box::new(OSXThread {
@@ -206,7 +209,11 @@ impl Target {
             }
             Ok(osx_threads)
         } else {
-            Err(format!("Failure to read task {} threads. Error: {}", self.port, result).into())
+            Err(format!(
+                "Failure to read task {} threads. Error: {}",
+                self.port, result
+            )
+            .into())
         }
     }
 }
