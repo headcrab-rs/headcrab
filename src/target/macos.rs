@@ -191,8 +191,10 @@ impl Target {
 
             for i in 0..tcount {
                 let port = unsafe { *threads.add(i) };
-                let pthread_id = Some(unsafe { pthread_from_mach_thread_np(port) })
-                    .filter(|pthread| *pthread != 0);
+                let pthread_id = match unsafe { pthread_from_mach_thread_np(port) } {
+                    0 => None,
+                    id => Some(id)
+                };
                 let task_port = self.port;
                 let thread = Box::new(OSXThread {
                     port,
