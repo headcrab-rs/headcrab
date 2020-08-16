@@ -32,6 +32,8 @@ questions and find more educational resources.
 
 Currently, Headcrab is intended to work with the current stable version of Rust, but some components might require using `nightly` in the future.
 
+When implementing modules, please prefer using module_name.rs over module_name/mod.rs. This avoids having lots of file with identical names in the source tree.
+
 We follow common Rust conventions and use default `rustfmt` format settings. Before submitting a pull request, please format it locally by running the following command:
 
 ```
