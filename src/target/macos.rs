@@ -204,7 +204,7 @@ impl Target {
             }
             Ok(osx_threads)
         } else {
-            Err(format!("Failure to read task {} threads.", self.port).into())
+            Err(format!("Failure to read task {} threads. Error: {}", self.port, result).into())
         }
     }
 }
