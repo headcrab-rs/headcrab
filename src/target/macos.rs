@@ -57,7 +57,7 @@ impl Thread for OSXThread {
             let mut name = [0 as libc::c_char; MAX_THREAD_NAME];
             let name_ptr = &mut name as *mut [libc::c_char] as *mut libc::c_char;
             let get_name = unsafe { libc::pthread_getname_np(pt_id, name_ptr, MAX_THREAD_NAME) };
-            return if get_name == 0 {
+            if get_name == 0 {
                 let name = unsafe { CStr::from_ptr(name_ptr) }.to_str()?.to_owned();
                 Ok(Some(name))
             } else {
@@ -66,9 +66,10 @@ impl Thread for OSXThread {
                     pt_id, get_name
                 )
                 .into())
-            };
-        };
-        Ok(None)
+            }
+        } else {
+            Ok(None)
+        }
     }
 
     fn thread_id(&self) -> Self::ThreadId {
