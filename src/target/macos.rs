@@ -1,13 +1,20 @@
 mod vmmap;
 
+use crate::target::thread::Thread;
 use libc::pid_t;
-use mach::{kern_return, message, port, traps, vm, vm_types::*};
+use mach::{
+    kern_return, mach_types, mach_types::ipc_space_t, message::mach_msg_type_number_t, port,
+    port::mach_port_name_t, port::mach_port_t, traps, traps::current_task, vm, vm_types::*,
+};
 use nix::{
     sys::signal::{self, Signal},
+    unistd,
     unistd::Pid,
 };
 use security_framework_sys::authorization::*;
 use std::{
+    error::Error,
+    ffi::CStr,
     ffi::CString,
     io,
     marker::PhantomData,
@@ -18,6 +25,57 @@ use std::{
 // Undocumented flag to disable address space layout randomization.
 // For more information about ASLR, you can refer to https://en.wikipedia.org/wiki/Address_space_layout_randomization
 const _POSIX_SPAWN_DISABLE_ASLR: i32 = 0x0100;
+
+// Max number of characters to read from a thread name.
+const MAX_THREAD_NAME: usize = 100;
+
+struct OSXThread {
+    port: mach_port_name_t,
+    pthread_id: Option<usize>,
+    task_port: ipc_space_t,
+}
+
+impl Drop for OSXThread {
+    fn drop(&mut self) {
+        let result = unsafe { mach::mach_port::mach_port_deallocate(self.task_port, self.port) };
+        if result != kern_return::KERN_SUCCESS {
+            panic!("Failed to deallocate port!");
+        }
+    }
+}
+
+extern "C" {
+    // FIXME: Use libc  > 0.2.74 when available
+    pub fn pthread_from_mach_thread_np(port: libc::c_uint) -> libc::pthread_t;
+}
+
+impl Thread for OSXThread {
+    type ThreadId = mach_port_t;
+
+    fn name(&self) -> Result<Option<String>, Box<dyn Error>> {
+        if let Some(pt_id) = self.pthread_id {
+            let mut name = [0 as libc::c_char; MAX_THREAD_NAME];
+            let name_ptr = &mut name as *mut [libc::c_char] as *mut libc::c_char;
+            let get_name = unsafe { libc::pthread_getname_np(pt_id, name_ptr, MAX_THREAD_NAME) };
+            if get_name == 0 {
+                let name = unsafe { CStr::from_ptr(name_ptr) }.to_str()?.to_owned();
+                Ok(Some(name))
+            } else {
+                Err(format!(
+                    "Failure to read pthread {} name. Error: {}",
+                    pt_id, get_name
+                )
+                .into())
+            }
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn thread_id(&self) -> Self::ThreadId {
+        self.port
+    }
+}
 
 pub struct Target {
     /// Port for a target task
@@ -113,6 +171,51 @@ impl Target {
     /// Reads memory from a debuggee process.
     pub fn read(&self) -> ReadMemory {
         ReadMemory::new(self.port)
+    }
+
+    /// Uses this process as a debuggee.
+    pub fn me() -> Target {
+        let port = unsafe { current_task() };
+        let pid = unistd::getpid();
+        Target { port, pid }
+    }
+
+    /// Returns the current snapshot view of this debuggee process threads.
+    pub fn threads(
+        &self,
+    ) -> Result<Vec<Box<dyn Thread<ThreadId = mach_port_t>>>, Box<dyn std::error::Error>> {
+        let mut threads: mach_types::thread_act_array_t = std::ptr::null_mut();
+        let mut tcount: mach_msg_type_number_t = 0;
+
+        let result = unsafe { mach::task::task_threads(self.port, &mut threads, &mut tcount) };
+
+        if result == kern_return::KERN_SUCCESS {
+            let tcount = tcount as usize;
+            let mut osx_threads = Vec::with_capacity(tcount);
+
+            for i in 0..tcount {
+                let port = unsafe { *threads.add(i) };
+                let pthread_id = match unsafe { pthread_from_mach_thread_np(port) } {
+                    0 => None,
+                    id => Some(id),
+                };
+                let task_port = self.port;
+                let thread = Box::new(OSXThread {
+                    port,
+                    pthread_id,
+                    task_port,
+                }) as Box<dyn Thread<ThreadId = mach_port_t>>;
+
+                osx_threads.push(thread);
+            }
+            Ok(osx_threads)
+        } else {
+            Err(format!(
+                "Failure to read task {} threads. Error: {}",
+                self.port, result
+            )
+            .into())
+        }
     }
 }
 
@@ -250,7 +353,10 @@ fn request_authorization() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod tests {
     use super::ReadMemory;
+    use super::*;
     use mach::traps::mach_task_self;
+    use std::sync::{Arc, Barrier};
+    use std::thread;
 
     #[test]
     fn read_memory() {
@@ -272,5 +378,54 @@ mod tests {
         assert_eq!(read_var_op, var);
 
         assert!(true);
+    }
+
+    #[test]
+    fn read_threads() -> Result<(), Box<dyn std::error::Error>> {
+        let start_barrier = Arc::new(Barrier::new(2));
+        let end_barrier = Arc::new(Barrier::new(2));
+
+        let t1_start = start_barrier.clone();
+        let t1_end = end_barrier.clone();
+
+        let thread_name = "thread-name";
+        let t1_handle = thread::Builder::new()
+            .name(thread_name.to_string())
+            .spawn(move || {
+                t1_start.wait();
+                t1_end.wait();
+            })
+            .unwrap();
+
+        start_barrier.wait();
+
+        let proc = Target::me();
+        let threads = proc.threads()?;
+
+        let threads: Vec<_> = threads
+            .iter()
+            .map(|t| {
+                let name = t.name().unwrap().unwrap_or_else(String::new);
+                let id = t.thread_id();
+                (name, id)
+            })
+            .collect();
+
+        assert!(
+            threads.len() >= 2,
+            "Expected at least 2 threads in {:?}",
+            threads
+        );
+
+        assert!(
+            threads.iter().any(|(name, _)| name == thread_name),
+            "Expected to find thread name={} in {:?}",
+            thread_name,
+            threads
+        );
+
+        end_barrier.wait();
+        t1_handle.join().unwrap();
+        Ok(())
     }
 }
