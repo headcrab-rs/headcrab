@@ -503,13 +503,11 @@ mod tests {
 
                     // Parent reads memory
 
-                    use std::{thread, time};
                     thread::sleep(time::Duration::from_millis(300));
 
                     dealloc(ptr, layout);
                 }
                 Ok(ForkResult::Parent { child, .. }) => {
-                    use std::{thread, time};
                     thread::sleep(time::Duration::from_millis(100));
 
                     let (target, _wait_status) =

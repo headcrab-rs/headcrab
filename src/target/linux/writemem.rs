@@ -5,6 +5,10 @@ use std::{cmp, marker::PhantomData, mem, slice};
 
 const WORD_SIZE: usize = mem::size_of::<usize>();
 
+/// Write operations don't have any unique properties at this time.
+/// If needed, later this can be replaced with `struct WriteOp(MemoryOp, <extra props>)`.
+type WriteOp = MemoryOp;
+
 /// Allows to write data to different locations in debuggee's memory as a single operation.
 /// This implementation can select different strategies for different memory pages.
 pub struct WriteMemory<'a> {
@@ -36,8 +40,8 @@ impl<'a> WriteMemory<'a> {
     pub fn write<T: ?Sized>(mut self, val: &'a T, remote_base: usize) -> Self {
         self.write_ops.push(WriteOp {
             remote_base,
-            source_len: mem::size_of_val(val),
-            source_ptr: val as *const T as *const libc::c_void,
+            local_ptr: val as *const T as *mut libc::c_void,
+            local_ptr_len: mem::size_of_val(val),
         });
         self
     }
@@ -53,73 +57,78 @@ impl<'a> WriteMemory<'a> {
 
         let (protected, writable) = split_protected(&protected_maps, self.write_ops.into_iter())?;
 
-        write_process_vm(self.target.pid, &writable)?;
-        write_ptrace(self.target.pid, &protected)?;
+        // Break write operations into word groups.
+        let protected_groups = protected
+            .into_iter()
+            .flat_map(|op| op.into_word_sized_ops());
 
+        write_process_vm(self.target.pid, &writable)?;
+        write_ptrace(self.target.pid, protected_groups)?;
+
+        Ok(())
+    }
+
+    /// Executes memory writing operations using ptrace only.
+    /// This function should be used only for testing purposes.
+    unsafe fn apply_ptrace(self) -> Result<(), Box<dyn std::error::Error>> {
+        write_ptrace(
+            self.target.pid,
+            self.write_ops
+                .into_iter()
+                .flat_map(|op| op.into_word_sized_ops()),
+        )?;
         Ok(())
     }
 }
 
-/// A single memory write operation.
-#[derive(Debug, PartialEq, Clone, Copy, Eq)]
-pub(crate) struct WriteOp {
-    /// Remote destation location.
-    remote_base: usize,
-    /// Pointer to a source.
-    source_ptr: *const libc::c_void,
-    /// Size of `source_ptr`.
-    source_len: usize,
-}
-
-impl MemoryOp for WriteOp {
-    fn remote_base(&self) -> usize {
-        self.remote_base
-    }
+/// Breaks the memory write operation into groups of words suitable for writing
+/// with `ptrace::write`.
+///
+/// ptrace(PTRACE_POKETEXT) can write only a single word (usize) to the destination address.
+/// So if we want to write e.g. 1 byte, we need to read 8 bytes at the destination address
+/// first, replace the first byte, and overwrite it at the destination address again.
+/// Obviously, this is very inefficient since it requires a lot of context switches,
+/// but sometimes it's the only way to overwrite the target's memory.
+struct WordSizedOps {
+    mem_op: WriteOp,
 }
 
 impl WriteOp {
-    /// Converts the memory write operation into a remote IoVec.
-    fn as_remote_iovec(&self) -> libc::iovec {
-        libc::iovec {
-            iov_base: self.remote_base as *const libc::c_void as *mut _,
-            iov_len: self.source_len,
-        }
+    /// Converts this memory operation into an iterator that returns word-sized memory operations.
+    /// This is required for ptrace which is not capable of writing data larger than a single word
+    /// (which is equal to usize - or 8 bytes - on x86_64).
+    fn into_word_sized_ops(self) -> WordSizedOps {
+        WordSizedOps { mem_op: self }
     }
+}
 
-    /// Converts the memory write operation into a local IoVec.
-    fn as_local_iovec(&self) -> libc::iovec {
-        libc::iovec {
-            iov_base: self.source_ptr as *mut _,
-            iov_len: self.source_len,
-        }
-    }
+impl Iterator for WordSizedOps {
+    type Item = WriteOp;
 
-    /// Breaks the memory write operation into groups of words suitable for writing
-    /// with `ptrace::write`.
-    unsafe fn as_ptrace(&self) -> Vec<WriteOp> {
-        let mut output = Vec::with_capacity((self.source_len + WORD_SIZE - 1) / WORD_SIZE);
-
-        let WriteOp {
-            mut source_len,
-            mut source_ptr,
-            mut remote_base,
-        } = self;
-
-        while source_len > 0 {
-            let group_size = cmp::min(WORD_SIZE, source_len);
-
-            output.push(WriteOp {
-                remote_base,
-                source_ptr,
-                source_len: group_size,
-            });
-
-            source_len -= group_size;
-            source_ptr = source_ptr.offset(group_size as isize);
-            remote_base += group_size;
+    /// Produces a next word for writing to debuggee's memory.
+    ///
+    /// # Safety
+    ///
+    /// This function doesn't guarantee safety of produced pointers.
+    /// It's a user's responsibility to ensure the validity of provided memory addresses and sizes.
+    fn next(&mut self) -> Option<MemoryOp> {
+        if self.mem_op.local_ptr_len == 0 {
+            return None;
         }
 
-        output
+        let group_size = cmp::min(WORD_SIZE, self.mem_op.local_ptr_len);
+
+        let output = WriteOp {
+            remote_base: self.mem_op.remote_base,
+            local_ptr: self.mem_op.local_ptr,
+            local_ptr_len: group_size,
+        };
+
+        self.mem_op.local_ptr_len -= group_size;
+        self.mem_op.local_ptr = unsafe { self.mem_op.local_ptr.offset(group_size as isize) };
+        self.mem_op.remote_base += group_size;
+
+        Some(output)
     }
 }
 
@@ -127,26 +136,18 @@ impl WriteOp {
 /// On Linux, this will result in multiple system calls and it's inefficient.
 pub(crate) unsafe fn write_ptrace(
     pid: Pid,
-    write_ops: &[WriteOp],
+    write_ops: impl Iterator<Item = MemoryOp>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // ptrace(PTRACE_POKETEXT) can write only a single word (usize) to the destination address.
-    // So if we want to write e.g. 1 byte, we need to read 8 bytes at the destination address
-    // first, replace the first byte, and overwrite it at the destination address again.
-    // Obviously, this is very inefficient since it requires a lot of context switches,
-    // but sometimes it's the only way to overwrite the target's memory.
+    for op in write_ops {
+        assert!(op.local_ptr_len <= WORD_SIZE);
 
-    // Break write ops into groups of <usize> bytes.
-    let write_op_groups = write_ops.iter().flat_map(|op| op.as_ptrace());
-
-    for op in write_op_groups {
-        assert!(op.source_len <= WORD_SIZE);
-
-        if op.source_len < WORD_SIZE {
+        if op.local_ptr_len < WORD_SIZE {
             // Write op is smaller than a single word, so we should read memory before rewriting it.
             let mut word = ptrace::read(pid, op.remote_base as *mut _)?.to_ne_bytes();
-            let src_bytes: &[u8] = slice::from_raw_parts(op.source_ptr as *const _, op.source_len);
+            let src_bytes: &[u8] =
+                slice::from_raw_parts(op.local_ptr as *const _, op.local_ptr_len);
 
-            for offset in 0..op.source_len {
+            for offset in 0..op.local_ptr_len {
                 word[offset] = src_bytes[offset];
             }
 
@@ -156,7 +157,7 @@ pub(crate) unsafe fn write_ptrace(
                 usize::from_ne_bytes(word) as *mut usize as *mut _,
             )?;
         } else {
-            let word = op.source_ptr.cast::<usize>().read();
+            let word = op.local_ptr.cast::<usize>().read();
             ptrace::write(pid, op.remote_base as *mut _, word as *mut _)?;
         }
     }
@@ -200,14 +201,14 @@ pub(crate) unsafe fn write_process_vm(
 
 #[cfg(test)]
 mod tests {
-    use super::{write_process_vm, write_ptrace, WriteMemory, WriteOp};
+    use super::{write_process_vm, WriteMemory, WriteOp};
     use crate::target::LinuxTarget;
     use libc::c_void;
     use nix::{
         sys::{ptrace, signal, wait},
         unistd::{fork, getppid, ForkResult},
     };
-    use std::{mem, ptr};
+    use std::{mem, ptr, thread, time};
 
     #[test]
     fn write_memory_proc_vm() {
@@ -253,14 +254,13 @@ mod tests {
                     .write(&var, &write_var_op as *const _ as usize)
                     .write(&var2, &write_var2_op as *const _ as usize);
 
-                unsafe {
-                    write_ptrace(target.pid, &write_mem.write_ops).expect("Failed to write memory")
-                };
+                unsafe { write_mem.apply_ptrace().expect("Failed to write memory") };
 
                 ptrace::cont(parent, Some(signal::Signal::SIGCONT)).unwrap();
             }
             Ok(ForkResult::Parent { child, .. }) => {
                 wait::waitpid(child, None).unwrap();
+                thread::sleep(time::Duration::from_millis(100));
 
                 unsafe {
                     assert_eq!(ptr::read_volatile(&write_var_op), var);
@@ -278,22 +278,22 @@ mod tests {
 
         let write_op = WriteOp {
             remote_base: 0x100,
-            source_len: mem::size_of_val(&arr),
-            source_ptr: &arr[0] as *const _ as *const c_void,
+            local_ptr: &arr[0] as *const _ as *mut c_void,
+            local_ptr_len: mem::size_of_val(&arr),
         };
 
         assert_eq!(
-            unsafe { &write_op.as_ptrace()[..] },
+            &write_op.into_word_sized_ops().collect::<Vec<_>>()[..],
             &[
                 WriteOp {
                     remote_base: 0x100,
-                    source_len: mem::size_of::<u64>(),
-                    source_ptr: &arr[0] as *const _ as *const c_void,
+                    local_ptr: &arr[0] as *const _ as *mut c_void,
+                    local_ptr_len: mem::size_of::<u64>(),
                 },
                 WriteOp {
                     remote_base: 0x100 + mem::size_of::<u64>(),
-                    source_len: mem::size_of::<u64>(),
-                    source_ptr: &arr[1] as *const _ as *const c_void,
+                    local_ptr: &arr[1] as *const _ as *mut c_void,
+                    local_ptr_len: mem::size_of::<u64>(),
                 }
             ][..]
         );
@@ -312,23 +312,23 @@ mod tests {
 
         let write_op = WriteOp {
             remote_base: 0x100,
-            source_len: mem::size_of_val(&val),
-            source_ptr: &val as *const _ as *const c_void,
+            local_ptr: &val as *const _ as *mut c_void,
+            local_ptr_len: mem::size_of_val(&val),
         };
 
         unsafe {
             assert_eq!(
-                &write_op.as_ptrace()[..],
+                &write_op.into_word_sized_ops().collect::<Vec<_>>()[..],
                 &[
                     WriteOp {
                         remote_base: 0x100,
-                        source_len: mem::size_of::<u64>(),
-                        source_ptr: &val.v1 as *const _ as *const c_void,
+                        local_ptr: &val.v1 as *const _ as *mut c_void,
+                        local_ptr_len: mem::size_of::<u64>(),
                     },
                     WriteOp {
                         remote_base: 0x100 + mem::size_of::<u64>(),
-                        source_len: mem::size_of::<u16>(),
-                        source_ptr: &val.v2 as *const _ as *const c_void,
+                        local_ptr: &val.v2 as *const _ as *mut c_void,
+                        local_ptr_len: mem::size_of::<u16>(),
                     }
                 ][..]
             );
