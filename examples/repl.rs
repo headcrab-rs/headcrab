@@ -156,7 +156,7 @@ mod example {
                 println!("\x1b[1mList of Commands\x1b[0m");
                 println!("\x1b[1mexec\x1b[0m-- Start a program to debug");
                 println!("\x1b[1mattach\x1b[0m -- Attach to an existing program");
-                println!("\x1b[1mdetach\x1b[0m -- Detach from a previously attached process outside of headcrab");
+                println!("\x1b[1mdetach\x1b[0m -- Detach from the debugged program. Leaving it running when headcrab exits");
                 println!("\x1b[1mkill\x1b[0m -- Kill the program being debugged");
                 println!("\x1b[1mstepi|si\x1b[0m -- Step one instruction");
                 println!("\x1b[1mcontinue|cont\x1b[0m -- Continue the program being debugged");
