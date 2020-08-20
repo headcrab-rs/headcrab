@@ -154,19 +154,18 @@ mod example {
         match parts.next() {
             Some("h") | Some("help") => {
                 println!("\x1b[1mList of Commands\x1b[0m");
-                println!("\x1b[1mexec\x1b[0m-- Start the debugged program");
-                println!("\x1b[1mattach\x1b[0m -- Attach to a process outside of headcrab");
+                println!("\x1b[1mexec\x1b[0m-- Start a program to debug");
+                println!("\x1b[1mattach\x1b[0m -- Attach to an existing program");
                 println!("\x1b[1mdetach\x1b[0m -- Detach from a previously attached process outside of headcrab");
-                println!("\x1b[1mkill\x1b[0m -- Kill execution of prgram being debugged");
+                println!("\x1b[1mkill\x1b[0m -- Kill the program being debugged");
                 println!("\x1b[1mstepi|si\x1b[0m -- Step one instruction");
                 println!("\x1b[1mcontinue|cont\x1b[0m -- Continue the program being debugged");
                 println!("\x1b[1mregisters|regs\x1b[0m read -- List registers and their content for the current stack frame");
                 println!("\x1b[1mbacktrace|bt\x1b[0m -- Print backtrace of stack frames");
-                println!("\x1b[1mdisassemble|dis\x1b[0m -- Print the disassbled source");
+                println!("\x1b[1mdisassemble|dis\x1b[0m -- Print the disassembled source");
                 println!(
                     "\x1b[1mlocals\x1b[0m -- Print all local variables of current stack frame"
                 );
-                println!("\x1b[1m_patch_breakpoint_function|_pbf\x1b[0m -- Patch the `pause` instruction inside a function called `breakpoint` to be a breakpoint");
                 println!("\x1b[1mhelp|h\x1b[0m -- Print this help");
                 println!("\x1b[1mexit|quit|q\x1b[0m -- Exit");
             }
@@ -395,7 +394,7 @@ mod example {
             // breakpoint. This is useful while we don't have support for setting breakpoints at
             // runtime yet.
             // FIXME remove once real breakpoint support is added
-            Some("_patch_breakpoint_function") | Some("_pbf") => {
+            Some("_patch_breakpoint_function") => {
                 context.load_debuginfo_if_necessary()?;
                 // Test that `a_function` resolves to a function.
                 let breakpoint_addr = context.debuginfo().get_symbol_address("breakpoint").unwrap() + 4 /* prologue */;
