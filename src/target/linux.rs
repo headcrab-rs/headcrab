@@ -2,6 +2,7 @@ mod hardware_breakpoint;
 mod memory;
 mod readmem;
 mod software_breakpoint;
+mod software_breakpoint;
 mod writemem;
 
 use crate::target::thread::Thread;
@@ -11,7 +12,9 @@ use nix::sys::wait::{waitpid, WaitStatus};
 use nix::unistd::{getpid, Pid};
 use procfs::process::{Process, Task};
 use procfs::ProcError;
+use software_breakpoint::BreakpointEntry;
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::collections::HashMap;
 use std::{
     ffi::CString,
@@ -23,6 +26,7 @@ pub use hardware_breakpoint::{
     HardwareBreakpoint, HardwareBreakpointError, HardwareBreakpointSize, HardwareBreakpointType,
 };
 pub use readmem::ReadMemory;
+pub use software_breakpoint::Breakpoint;
 pub use software_breakpoint::Breakpoint;
 pub use writemem::WriteMemory;
 
