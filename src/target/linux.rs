@@ -1,8 +1,10 @@
+mod software_breakpoint;
 mod hardware_breakpoint;
 mod memory;
 mod readmem;
 mod writemem;
 
+use std::collections::HashMap;
 use crate::target::thread::Thread;
 use crate::target::unix::{self, UnixTarget};
 use nix::sys::ptrace;
@@ -14,10 +16,12 @@ use std::{
     fs::File,
     io::{BufRead, BufReader},
 };
+use software_breakpoint::BreakpointEntry;
 
 pub use hardware_breakpoint::{
     HardwareBreakpoint, HardwareBreakpointError, HardwareBreakpointSize, HardwareBreakpointType,
 };
+pub use software_breakpoint::Breakpoint;
 pub use readmem::ReadMemory;
 pub use writemem::WriteMemory;
 
@@ -70,6 +74,7 @@ impl Thread for LinuxThread {
 pub struct LinuxTarget {
     pid: Pid,
     hardware_breakpoints: [Option<HardwareBreakpoint>; SUPPORTED_HARDWARE_BREAKPOINTS],
+    breakpoints: HashMap<usize, BreakpointEntry>,
 }
 
 /// This structure is used to pass options to attach
@@ -84,6 +89,21 @@ impl UnixTarget for LinuxTarget {
     fn pid(&self) -> Pid {
         self.pid
     }
+
+    fn unpause(&self) -> Result<nix::sys::wait::WaitStatus, Box<dyn std::error::Error>> {
+        ptrace::cont(self.pid(), None)?;
+        let status = nix::sys::wait::waitpid(self.pid(), None)?;
+        match status {
+            // We may have hit a user defined breakpoint
+            nix::sys::wait::WaitStatus::Stopped(_, nix::sys::signal::Signal::SIGTRAP) => {
+                if let Some(bp_entry) = self.breakpoints.get(&(self.read_regs().unwrap().rip as usize - 1)) {
+                    self.restore_breakpoint(bp_entry)?;
+                };
+            },
+            _ => ()
+        };
+        Ok(status)
+    }
 }
 
 impl LinuxTarget {
@@ -91,6 +111,7 @@ impl LinuxTarget {
         Self {
             pid,
             hardware_breakpoints: Default::default(),
+            breakpoints: HashMap::new(),
         }
     }
 
@@ -402,6 +423,24 @@ impl LinuxTarget {
 
         #[cfg(not(target_arch = "x86_64"))]
         Err(Box::new(HardwareBreakpointError::UnsupportedPlatform))
+    }
+
+    pub fn set_breakpoint(&mut self, breakpoint: Breakpoint) -> Result<(), Box<dyn std::error::Error>> {
+        const INT3: libc::c_long = 0xcc;
+        let instr = ptrace::read(self.pid(),breakpoint.addr as *mut _)?;
+        let b_entry = BreakpointEntry::at(breakpoint.addr,  instr);
+        let trap_instr = (instr & !0xff) | INT3;
+        ptrace::write(self.pid(), breakpoint.addr as *mut _, trap_instr as *mut _)?;
+        self.breakpoints.insert(breakpoint.addr, b_entry);
+        Ok(())
+    }
+
+    pub fn restore_breakpoint(&self, breakpoint: &BreakpointEntry) -> Result<(), Box<dyn std::error::Error>> {
+        let mut regs = self.read_regs()?;
+        ptrace::write(self.pid(), breakpoint.addr as *mut _, breakpoint.saved_instr as *mut _)?;
+        regs.rip -= 1;
+        self.write_regs(regs)?;
+        Ok(())
     }
 
     // Temporary function until ptrace_peekuser is fixed in nix crate
