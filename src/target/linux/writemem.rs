@@ -38,11 +38,14 @@ impl<'a> WriteMemory<'a> {
     /// For example `T` must not be a `bool`, as `transmute::<u8, bool>(2)` is not a valid value for a bool.
     /// In case of doubt, wrap the type in [`mem::MaybeUninit`].
     pub fn write<T: ?Sized>(mut self, val: &'a T, remote_base: usize) -> Self {
-        self.write_ops.push(WriteOp {
-            remote_base,
-            local_ptr: val as *const T as *mut libc::c_void,
-            local_ptr_len: mem::size_of_val(val),
-        });
+        WriteOp::split_on_page_boundary(
+            &WriteOp {
+                remote_base,
+                local_ptr: val as *const T as *mut libc::c_void,
+                local_ptr_len: mem::size_of_val(val),
+            },
+            &mut self.write_ops,
+        );
         self
     }
 
@@ -57,11 +60,14 @@ impl<'a> WriteMemory<'a> {
     /// For example `T` must not be a `bool`, as `transmute::<u8, bool>(2)` is not a valid value for a bool.
     /// In case of doubt, wrap the type in [`mem::MaybeUninit`].
     pub fn write_slice<T>(mut self, val: &'a [T], remote_base: usize) -> Self {
-        self.write_ops.push(WriteOp {
-            remote_base,
-            local_ptr: val.as_ptr() as *mut libc::c_void,
-            local_ptr_len: val.len() * mem::size_of::<T>(),
-        });
+        WriteOp::split_on_page_boundary(
+            &WriteOp {
+                remote_base,
+                local_ptr: val.as_ptr() as *mut libc::c_void,
+                local_ptr_len: val.len() * mem::size_of::<T>(),
+            },
+            &mut self.write_ops,
+        );
         self
     }
 
@@ -87,7 +93,9 @@ impl<'a> WriteMemory<'a> {
             .flat_map(|op| op.into_word_sized_ops());
 
         unsafe {
-            write_process_vm(self.target.pid, &writable)?;
+            if !writable.is_empty() {
+                write_process_vm(self.target.pid, &writable)?;
+            }
             write_ptrace(self.target.pid, protected_groups)?;
         }
 
@@ -229,13 +237,20 @@ pub(crate) unsafe fn write_process_vm(
 #[cfg(test)]
 mod tests {
     use super::{write_process_vm, WriteMemory, WriteOp};
+    use crate::target::linux::memory::PAGE_SIZE;
     use crate::target::LinuxTarget;
     use libc::c_void;
     use nix::{
-        sys::{ptrace, signal, wait},
+        sys::{
+            mman::{mprotect, ProtFlags},
+            ptrace, signal, wait,
+        },
         unistd::{fork, getppid, ForkResult},
     };
-    use std::{mem, ptr, thread, time};
+    use std::{
+        alloc::{alloc_zeroed, dealloc, Layout},
+        mem, ptr,
+    };
 
     #[test]
     fn write_memory_proc_vm() {
@@ -265,7 +280,7 @@ mod tests {
     fn write_memory_ptrace() {
         let var: usize = 52;
         let var2: u8 = 128;
-        let array: [u8; 4] = [1, 2, 3, 4];
+        let dyn_array = vec![1, 2, 3, 4];
 
         let write_var_op: usize = 0;
         let write_var2_op: u8 = 0;
@@ -279,27 +294,93 @@ mod tests {
                 let parent = getppid();
                 let (target, _wait_stat) = LinuxTarget::attach(parent, Default::default()).unwrap();
 
-                let write_mem = WriteMemory::new(&target)
+                // Write memory to parent's process
+                let write_mem = target
+                    .write()
                     .write(&var, &write_var_op as *const _ as usize)
                     .write(&var2, &write_var2_op as *const _ as usize)
-                    .write_slice(&array, &write_array as *const _ as usize);
+                    .write_slice(&dyn_array, &write_array as *const _ as usize);
 
                 unsafe { write_mem.apply_ptrace().expect("Failed to write memory") };
 
-                ptrace::cont(parent, Some(signal::Signal::SIGCONT)).unwrap();
+                signal::kill(parent, signal::Signal::SIGCONT).unwrap();
+                ptrace::detach(parent, None).unwrap();
             }
-            Ok(ForkResult::Parent { child, .. }) => {
-                wait::waitpid(child, None).unwrap();
-                thread::sleep(time::Duration::from_millis(100));
+            Ok(ForkResult::Parent { .. }) => {
+                // Sleep & wait for the child to send us SIGCONT
+                signal::raise(signal::Signal::SIGSTOP).unwrap();
 
                 unsafe {
                     assert_eq!(ptr::read_volatile(&write_var_op), var);
                     assert_eq!(ptr::read_volatile(&write_var2_op), var2);
-                    assert_eq!(ptr::read_volatile(&write_array), array);
+                    assert_eq!(&ptr::read_volatile(&write_array), dyn_array.as_slice());
                 }
             }
             Err(x) => panic!(x),
         }
+    }
+
+    #[test]
+    fn write_protected_memory() {
+        let var: usize = 101;
+        let var2: u8 = 102;
+
+        // Allocate an empty page and make it read-only
+        let layout = Layout::from_size_align(2 * *PAGE_SIZE, *PAGE_SIZE).unwrap();
+        let (write_protected_ptr, write_protected_ptr2) = unsafe {
+            let ptr = alloc_zeroed(layout);
+            mprotect(
+                ptr as *mut std::ffi::c_void,
+                *PAGE_SIZE,
+                ProtFlags::PROT_READ,
+            )
+            .expect("Failed to mprotect");
+
+            (
+                ptr as *const usize,
+                ptr.offset(mem::size_of::<usize>() as _),
+            )
+        };
+
+        // ptrace::attach() is not allowed to be called on its own process, so we do a fork.
+        // child process writes to the parent's memory instead of the other way around because it's easier to
+        // check results with assert_eq! this way.
+        match fork() {
+            Ok(ForkResult::Child) => {
+                let parent = getppid();
+                let (target, _wait_stat) = LinuxTarget::attach(parent, Default::default()).unwrap();
+
+                // Write memory to parent's process
+                target
+                    .write()
+                    .write(&var, write_protected_ptr as usize)
+                    .write(&var2, write_protected_ptr2 as usize)
+                    .apply()
+                    .expect("Failed to write memory");
+
+                signal::kill(parent, signal::Signal::SIGCONT).unwrap();
+                ptrace::detach(parent, None).unwrap();
+            }
+            Ok(ForkResult::Parent { child, .. }) => unsafe {
+                // Sleep & wait for the child to send us SIGCONT
+                signal::raise(signal::Signal::SIGSTOP).unwrap();
+
+                assert_eq!(ptr::read_volatile(write_protected_ptr), var);
+                assert_eq!(ptr::read_volatile(write_protected_ptr2), var2);
+
+                // 'Unprotect' memory so that it can be deallocated
+                mprotect(
+                    write_protected_ptr as *mut _,
+                    *PAGE_SIZE,
+                    ProtFlags::PROT_WRITE | ProtFlags::PROT_READ,
+                )
+                .expect("Failed to mprotect");
+                dealloc(write_protected_ptr as *mut _, layout);
+
+                wait::waitpid(child, None).unwrap();
+            },
+            Err(x) => panic!(x),
+        };
     }
 
     /// Tests transformation of `WriteOp` into groups of words suitable for use in `ptrace::write`.

@@ -497,7 +497,7 @@ mod tests {
 
             match fork() {
                 Ok(ForkResult::Child) => {
-                    *(ptr as *mut u8) = var1;
+                    ptr::write(ptr, var1);
 
                     mprotect(
                         ptr as *mut std::ffi::c_void,
@@ -506,8 +506,7 @@ mod tests {
                     )
                     .expect("Failed to mprotect");
 
-                    // Parent reads memory
-
+                    // Wait for the parent to read memory before terminating this process
                     thread::sleep(time::Duration::from_millis(300));
 
                     dealloc(ptr, layout);
