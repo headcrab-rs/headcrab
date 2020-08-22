@@ -46,8 +46,32 @@ impl<'a> WriteMemory<'a> {
         self
     }
 
+    /// Writes a slice of type `T` into debuggee's memory at location `remote_base`.
+    /// The entries will be read from the provided slice `val`.
+    /// You should call `apply` in order to execute the memory write operation.
+    /// The lifetime of the variable `val` is bound to the lifetime of `WriteMemory`.
+    ///
+    /// # Safety
+    ///
+    /// The type `T` must not have any invalid values.
+    /// For example `T` must not be a `bool`, as `transmute::<u8, bool>(2)` is not a valid value for a bool.
+    /// In case of doubt, wrap the type in [`mem::MaybeUninit`].
+    pub fn write_slice<T>(mut self, val: &'a [T], remote_base: usize) -> Self {
+        self.write_ops.push(WriteOp {
+            remote_base,
+            local_ptr: val.as_ptr() as *mut libc::c_void,
+            local_ptr_len: val.len() * mem::size_of::<T>(),
+        });
+        self
+    }
+
     /// Executes the memory write operation.
-    pub unsafe fn apply(self) -> Result<(), Box<dyn std::error::Error>> {
+    ///
+    /// # Safety
+    ///
+    /// It's a user's responsibility to ensure that debuggee memory addresses are valid.
+    /// This function only reads memory from the local process.
+    pub fn apply(self) -> Result<(), Box<dyn std::error::Error>> {
         let protected_maps = self
             .target
             .memory_maps()?
@@ -62,14 +86,17 @@ impl<'a> WriteMemory<'a> {
             .into_iter()
             .flat_map(|op| op.into_word_sized_ops());
 
-        write_process_vm(self.target.pid, &writable)?;
-        write_ptrace(self.target.pid, protected_groups)?;
+        unsafe {
+            write_process_vm(self.target.pid, &writable)?;
+            write_ptrace(self.target.pid, protected_groups)?;
+        }
 
         Ok(())
     }
 
     /// Executes memory writing operations using ptrace only.
     /// This function should be used only for testing purposes.
+    #[cfg(test)]
     unsafe fn apply_ptrace(self) -> Result<(), Box<dyn std::error::Error>> {
         write_ptrace(
             self.target.pid,
@@ -238,9 +265,11 @@ mod tests {
     fn write_memory_ptrace() {
         let var: usize = 52;
         let var2: u8 = 128;
+        let array: [u8; 4] = [1, 2, 3, 4];
 
         let write_var_op: usize = 0;
         let write_var2_op: u8 = 0;
+        let write_array = [0u8; 4];
 
         // ptrace::attach() is not allowed to be called on its own process, so we do a fork.
         // child process writes to the parent's memory instead of the other way around because it's easier to
@@ -252,7 +281,8 @@ mod tests {
 
                 let write_mem = WriteMemory::new(&target)
                     .write(&var, &write_var_op as *const _ as usize)
-                    .write(&var2, &write_var2_op as *const _ as usize);
+                    .write(&var2, &write_var2_op as *const _ as usize)
+                    .write_slice(&array, &write_array as *const _ as usize);
 
                 unsafe { write_mem.apply_ptrace().expect("Failed to write memory") };
 
@@ -265,6 +295,7 @@ mod tests {
                 unsafe {
                     assert_eq!(ptr::read_volatile(&write_var_op), var);
                     assert_eq!(ptr::read_volatile(&write_var2_op), var2);
+                    assert_eq!(ptr::read_volatile(&write_array), array);
                 }
             }
             Err(x) => panic!(x),

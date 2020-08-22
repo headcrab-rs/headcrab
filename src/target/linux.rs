@@ -129,6 +129,11 @@ impl LinuxTarget {
         ReadMemory::new(&self)
     }
 
+    /// Writes memory to a debuggee process.
+    pub fn write(&self) -> WriteMemory {
+        WriteMemory::new(&self)
+    }
+
     /// Reads the register values from the main thread of a debuggee process.
     pub fn read_regs(&self) -> Result<libc::user_regs_struct, Box<dyn std::error::Error>> {
         nix::sys::ptrace::getregs(self.pid()).map_err(|err| err.into())
