@@ -339,12 +339,20 @@ mod tests {
                 let (target, _wait_stat) = LinuxTarget::attach(parent, Default::default()).unwrap();
 
                 // Write memory to parent's process
-                target
+                let write_mem = target
                     .write()
                     .write(&var, write_protected_ptr as usize)
-                    .write(&var2, write_protected_ptr2 as usize)
-                    .apply()
-                    .expect("Failed to write memory");
+                    .write(&var2, write_protected_ptr2 as usize);
+
+                unsafe {
+                    // FIXME: we deliberately use `apply_ptrace()` instead of `apply()` because `apply()` depends on
+                    // `lazy_static` to read the debuggee memory maps, and `lazy_static` uses
+                    // `std::sync::Once` which can have undefined behaviour in a forked process:
+                    // https://github.com/rust-lang/rust/issues/43448
+                    // This can be fixed by either _not_ using fork or not using `lazy_static` while
+                    // reading memory maps.
+                    write_mem.apply_ptrace().expect("Failed to write memory");
+                }
 
                 signal::kill(parent, signal::Signal::SIGCONT).unwrap();
                 ptrace::detach(parent, None).unwrap();
