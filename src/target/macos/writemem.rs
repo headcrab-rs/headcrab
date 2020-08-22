@@ -27,14 +27,16 @@ impl<'a> WriteMemory<'a> {
     }
 
     /// Executes the memory write operation.
-    pub unsafe fn apply(self) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn apply(self) -> Result<(), Box<dyn std::error::Error>> {
         for write_op in &self.write_ops {
-            let res = vm::mach_vm_write(
-                self.target_port,
-                write_op.remote_base as mach_vm_address_t,
-                write_op.source_ptr as vm_offset_t,
-                write_op.source_len as mach_msg_type_number_t,
-            );
+            let res = unsafe {
+                vm::mach_vm_write(
+                    self.target_port,
+                    write_op.remote_base as mach_vm_address_t,
+                    write_op.source_ptr as vm_offset_t,
+                    write_op.source_len as mach_msg_type_number_t,
+                )
+            };
 
             if res != kern_return::KERN_SUCCESS {
                 // TODO: account for partial writes
@@ -50,11 +52,11 @@ impl<'a> WriteMemory<'a> {
 /// A single memory write operation.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct WriteOp {
-    // Remote destation location.
+    /// Remote destation location.
     remote_base: usize,
-    // Pointer to a source.
+    /// Pointer to a source.
     source_ptr: *const libc::c_void,
-    // Size of `source_ptr`.
+    /// Size of `source_ptr`.
     source_len: usize,
 }
 

@@ -31,12 +31,6 @@ impl<'a> WriteMemory<'a> {
     /// The value will be read from the provided variable `val`.
     /// You should call `apply` in order to execute the memory write operation.
     /// The lifetime of the variable `val` is bound to the lifetime of `WriteMemory`.
-    ///
-    /// # Safety
-    ///
-    /// The type `T` must not have any invalid values.
-    /// For example `T` must not be a `bool`, as `transmute::<u8, bool>(2)` is not a valid value for a bool.
-    /// In case of doubt, wrap the type in [`mem::MaybeUninit`].
     pub fn write<T: ?Sized>(mut self, val: &'a T, remote_base: usize) -> Self {
         WriteOp::split_on_page_boundary(
             &WriteOp {
@@ -53,12 +47,6 @@ impl<'a> WriteMemory<'a> {
     /// The entries will be read from the provided slice `val`.
     /// You should call `apply` in order to execute the memory write operation.
     /// The lifetime of the variable `val` is bound to the lifetime of `WriteMemory`.
-    ///
-    /// # Safety
-    ///
-    /// The type `T` must not have any invalid values.
-    /// For example `T` must not be a `bool`, as `transmute::<u8, bool>(2)` is not a valid value for a bool.
-    /// In case of doubt, wrap the type in [`mem::MaybeUninit`].
     pub fn write_slice<T>(mut self, val: &'a [T], remote_base: usize) -> Self {
         WriteOp::split_on_page_boundary(
             &WriteOp {
@@ -73,7 +61,7 @@ impl<'a> WriteMemory<'a> {
 
     /// Executes the memory write operation.
     ///
-    /// # Safety
+    /// # Remote safety
     ///
     /// It's a user's responsibility to ensure that debuggee memory addresses are valid.
     /// This function only reads memory from the local process.

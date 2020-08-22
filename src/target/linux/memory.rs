@@ -8,9 +8,9 @@ lazy_static::lazy_static! {
     pub(crate) static ref PAGE_SIZE: usize = unsafe { libc::sysconf(libc::_SC_PAGESIZE) as usize };
 }
 
-/// Abstract memory operation (reading or writing).
+/// Individual memory operation (reading or writing).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct MemoryOp {
+pub(crate) struct MemoryOp {
     /// Remote memory location.
     pub remote_base: usize,
     /// Pointer to a local destination or source buffer.
@@ -37,7 +37,7 @@ impl MemoryOp {
     }
 
     /// Splits `MemoryOp` so that each resulting `MemoryOp` resides in only one memory page.
-    pub fn split_on_page_boundary(&self, out: &mut Vec<impl From<MemoryOp>>) {
+    pub(crate) fn split_on_page_boundary(&self, out: &mut Vec<impl From<MemoryOp>>) {
         // Number of bytes left to be read or written
         let mut left = self.local_ptr_len;
 
@@ -84,7 +84,7 @@ impl MemoryOp {
 /// let maps: Vec<MemoryMap> = vec![];
 /// let protected_maps = maps.into_iter().filter(|map| !map.is_writable);
 /// ```
-pub fn split_protected<'a>(
+pub(crate) fn split_protected<'a>(
     protected_maps: &'a [MemoryMap],
     operations: impl Iterator<Item = MemoryOp>,
 ) -> Result<(Vec<MemoryOp>, Vec<MemoryOp>), Box<dyn std::error::Error>> {
