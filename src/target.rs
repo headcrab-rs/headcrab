@@ -18,6 +18,9 @@ mod windows;
 #[cfg(target_os = "windows")]
 pub use windows::*;
 
+mod gdb_remote;
+pub use gdb_remote::*;
+
 mod thread;
 
 #[derive(Debug)]
