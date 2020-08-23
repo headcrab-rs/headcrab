@@ -231,9 +231,9 @@ mod tests {
     use nix::{
         sys::{
             mman::{mprotect, ProtFlags},
-            ptrace, signal, wait,
+            ptrace, wait,
         },
-        unistd::{fork, getppid, ForkResult},
+        unistd::{self, fork, getppid, ForkResult},
     };
     use std::{
         alloc::{alloc_zeroed, dealloc, Layout},
@@ -274,6 +274,9 @@ mod tests {
         let write_var2_op: u8 = 0;
         let write_array = [0u8; 4];
 
+        // Use a pipe for synchronization between parent & child processes.
+        let (read_pipe, write_pipe) = unistd::pipe().unwrap();
+
         // ptrace::attach() is not allowed to be called on its own process, so we do a fork.
         // child process writes to the parent's memory instead of the other way around because it's easier to
         // check results with assert_eq! this way.
@@ -291,12 +294,15 @@ mod tests {
 
                 unsafe { write_mem.apply_ptrace().expect("Failed to write memory") };
 
-                signal::kill(parent, signal::Signal::SIGCONT).unwrap();
+                // Close the write end of the pipe for synchronization with the parent.
+                unistd::close(write_pipe).unwrap();
+
                 ptrace::detach(parent, None).unwrap();
             }
             Ok(ForkResult::Parent { .. }) => {
                 // Sleep & wait for the child to send us SIGCONT
-                signal::raise(signal::Signal::SIGSTOP).unwrap();
+                unistd::close(write_pipe).unwrap();
+                let _ = unistd::read(read_pipe, &mut [0]).unwrap();
 
                 unsafe {
                     assert_eq!(ptr::read_volatile(&write_var_op), var);
@@ -330,6 +336,9 @@ mod tests {
             )
         };
 
+        // Use a pipe for synchronization between parent & child processes.
+        let (read_pipe, write_pipe) = unistd::pipe().unwrap();
+
         // ptrace::attach() is not allowed to be called on its own process, so we do a fork.
         // child process writes to the parent's memory instead of the other way around because it's easier to
         // check results with assert_eq! this way.
@@ -354,12 +363,15 @@ mod tests {
                     write_mem.apply_ptrace().expect("Failed to write memory");
                 }
 
-                signal::kill(parent, signal::Signal::SIGCONT).unwrap();
+                // Close the write end of the pipe for synchronization with the parent.
+                unistd::close(write_pipe).unwrap();
+
                 ptrace::detach(parent, None).unwrap();
             }
             Ok(ForkResult::Parent { child, .. }) => unsafe {
-                // Sleep & wait for the child to send us SIGCONT
-                signal::raise(signal::Signal::SIGSTOP).unwrap();
+                // Synchronize with the child - the read end of the pipe will be blocked until it's closed by the child process.
+                unistd::close(write_pipe).unwrap();
+                let _ = unistd::read(read_pipe, &mut [0]).unwrap();
 
                 assert_eq!(ptr::read_volatile(write_protected_ptr), var);
                 assert_eq!(ptr::read_volatile(write_protected_ptr2), var2);
