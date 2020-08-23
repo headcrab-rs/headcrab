@@ -1,9 +1,13 @@
 use super::{
     memory::{split_protected, MemoryOp},
-    LinuxTarget, PAGE_SIZE,
+    LinuxTarget,
 };
 use nix::{sys::ptrace, unistd::Pid};
-use std::{cmp, marker::PhantomData, mem};
+use std::{marker::PhantomData, mem};
+
+/// Read operations don't have any unique properties at this time.
+/// If needed, later this can be replaced with `struct ReadOp(MemoryOp, <extra props>)`.
+type ReadOp = MemoryOp;
 
 /// Allows to read memory from different locations in debuggee's memory as a single operation.
 pub struct ReadMemory<'a> {
@@ -35,11 +39,11 @@ impl<'a> ReadMemory<'a> {
     /// In case of doubt, wrap the type in [`mem::MaybeUninit`].
     // todo: further document mem safety - e.g., what happens in the case of partial read
     pub unsafe fn read<T>(mut self, val: &'a mut T, remote_base: usize) -> Self {
-        ReadOp::split_on_page_boundary(
-            &ReadOp {
+        MemoryOp::split_on_page_boundary(
+            &MemoryOp {
                 remote_base,
-                len: mem::size_of::<T>(),
                 local_ptr: val as *mut T as *mut libc::c_void,
+                local_ptr_len: mem::size_of::<T>(),
             },
             &mut self.read_ops,
         );
@@ -58,11 +62,11 @@ impl<'a> ReadMemory<'a> {
     /// You need to ensure the lifetime guarantees, and generally you should prefer using `read<T>(&mut val)`.
     // todo: further document mem safety - e.g., what happens in the case of partial read
     pub unsafe fn read_ptr<T>(mut self, ptr: *mut T, remote_base: usize) -> Self {
-        ReadOp::split_on_page_boundary(
-            &ReadOp {
+        MemoryOp::split_on_page_boundary(
+            &MemoryOp {
                 remote_base,
-                len: mem::size_of::<T>(),
                 local_ptr: ptr as *mut _,
+                local_ptr_len: mem::size_of::<T>(),
             },
             &mut self.read_ops,
         );
@@ -82,11 +86,11 @@ impl<'a> ReadMemory<'a> {
     /// In case of doubt, wrap the type in [`mem::MaybeUninit`].
     // todo: further document mem safety - e.g., what happens in the case of partial read
     pub unsafe fn read_slice<T>(mut self, val: &'a mut [T], remote_base: usize) -> Self {
-        ReadOp::split_on_page_boundary(
-            &ReadOp {
+        MemoryOp::split_on_page_boundary(
+            &MemoryOp {
                 remote_base,
-                len: val.len() * mem::size_of::<T>(),
                 local_ptr: val.as_mut_ptr() as *mut _,
+                local_ptr_len: val.len() * mem::size_of::<T>(),
             },
             &mut self.read_ops,
         );
@@ -97,11 +101,11 @@ impl<'a> ReadMemory<'a> {
     /// This value will be written to the provided slice `val`.
     /// You should call `apply` in order to execute the memory read operation.
     pub fn read_byte_slice<T>(mut self, val: &'a mut [u8], remote_base: usize) -> Self {
-        ReadOp::split_on_page_boundary(
-            &ReadOp {
+        MemoryOp::split_on_page_boundary(
+            &MemoryOp {
                 remote_base,
-                len: val.len(),
                 local_ptr: val.as_mut_ptr() as *mut _,
+                local_ptr_len: val.len(),
             },
             &mut self.read_ops,
         );
@@ -114,13 +118,14 @@ impl<'a> ReadMemory<'a> {
         let read_len = self
             .read_ops
             .iter()
-            .fold(0, |sum, read_op| sum + read_op.len);
+            .fold(0, |sum, read_op| sum + read_op.local_ptr_len);
 
         if read_len > isize::MAX as usize {
             panic!("Read size too big");
         };
 
-        // FIXME: Probably a better way to do this
+        // FIXME: Probably a better way to do this - see if we can get info about pages protection from
+        // cache and predict whether this operation will require ptrace or plain read_process_vm would work.
         let result = Self::read_process_vm(pid, &self.read_ops);
 
         if result.is_err() && result.unwrap_err() == nix::Error::Sys(nix::errno::Errno::EFAULT)
@@ -176,18 +181,18 @@ impl<'a> ReadMemory<'a> {
 
     /// Allows to read from protected memory pages.
     /// This operation results in multiple system calls and is inefficient.
-    fn read_ptrace(pid: Pid, read_ops: &[ReadOp]) -> Result<(), Box<dyn std::error::Error>> {
+    fn read_ptrace(pid: Pid, read_ops: &[MemoryOp]) -> Result<(), Box<dyn std::error::Error>> {
         let long_size = std::mem::size_of::<std::os::raw::c_long>();
 
         for read_op in read_ops {
             let mut offset: usize = 0;
             // Read until all of the data is read
-            while offset < read_op.len {
+            while offset < read_op.local_ptr_len {
                 let data =
                     ptrace::read(pid, (read_op.remote_base + offset) as *mut std::ffi::c_void)?;
 
                 // Read full word. No need to preserve other data
-                if (read_op.len - offset) >= long_size {
+                if (read_op.local_ptr_len - offset) >= long_size {
                     // todo: document unsafety
                     unsafe {
                         *((read_op.local_ptr as usize + offset) as *mut i64) = data;
@@ -199,88 +204,17 @@ impl<'a> ReadMemory<'a> {
                     unsafe {
                         let previous_bytes: &mut [u8] = std::slice::from_raw_parts_mut(
                             (read_op.local_ptr as usize + offset) as *mut u8,
-                            read_op.len - offset,
+                            read_op.local_ptr_len - offset,
                         );
                         let data_bytes = data.to_ne_bytes();
 
-                        previous_bytes[0..(read_op.len - offset)]
-                            .clone_from_slice(&data_bytes[0..(read_op.len - offset)]);
+                        previous_bytes[0..(read_op.local_ptr_len - offset)]
+                            .clone_from_slice(&data_bytes[0..(read_op.local_ptr_len - offset)]);
                     }
                 }
                 offset += long_size;
             }
         }
         Ok(())
-    }
-}
-
-/// A single memory read operation.
-#[derive(Debug, Clone, Copy)]
-struct ReadOp {
-    // Remote memory location.
-    remote_base: usize,
-    // Size of the `local_ptr` buffer.
-    len: usize,
-    // Pointer to a local destination buffer.
-    local_ptr: *mut libc::c_void,
-}
-
-impl MemoryOp for ReadOp {
-    fn remote_base(&self) -> usize {
-        self.remote_base
-    }
-}
-
-impl ReadOp {
-    /// Converts the memory read operation into a remote IoVec.
-    fn as_remote_iovec(&self) -> libc::iovec {
-        libc::iovec {
-            iov_base: self.remote_base as *const libc::c_void as *mut _,
-            iov_len: self.len,
-        }
-    }
-
-    /// Converts the memory read operation into a local IoVec.
-    fn as_local_iovec(&self) -> libc::iovec {
-        libc::iovec {
-            iov_base: self.local_ptr,
-            iov_len: self.len,
-        }
-    }
-
-    /// Splits ReadOp so that each resulting ReadOp resides in only one memory page.
-    fn split_on_page_boundary(&self, out: &mut Vec<ReadOp>) {
-        // Number of bytes left to be read
-        let mut left = self.len;
-
-        let next_page_distance = *PAGE_SIZE - ((*PAGE_SIZE - 1) & self.remote_base);
-        let to_next_read_op = cmp::min(left, next_page_distance);
-        // Read from remote_base to the end or to the next page
-        out.push(ReadOp {
-            remote_base: self.remote_base,
-            len: to_next_read_op,
-            local_ptr: self.local_ptr,
-        });
-        left -= to_next_read_op;
-
-        while left > 0 {
-            if left < *PAGE_SIZE {
-                // Read from beginning of the page to a part in the middle (last read)
-                out.push(ReadOp {
-                    remote_base: self.remote_base + (self.len - left),
-                    len: left,
-                    local_ptr: (self.local_ptr as usize + (self.len - left)) as *mut libc::c_void,
-                });
-                break;
-            } else {
-                // Whole page is being read
-                out.push(ReadOp {
-                    remote_base: self.remote_base + (self.len - left),
-                    len: *PAGE_SIZE,
-                    local_ptr: (self.local_ptr as usize + (self.len - left)) as *mut libc::c_void,
-                });
-                left -= *PAGE_SIZE;
-            }
-        }
     }
 }

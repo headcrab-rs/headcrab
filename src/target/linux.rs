@@ -1,6 +1,7 @@
 mod hardware_breakpoint;
 mod memory;
 mod readmem;
+mod writemem;
 
 use crate::target::thread::Thread;
 use crate::target::unix::{self, UnixTarget};
@@ -18,6 +19,7 @@ pub use hardware_breakpoint::{
     HardwareBreakpoint, HardwareBreakpointError, HardwareBreakpointSize, HardwareBreakpointType,
 };
 pub use readmem::ReadMemory;
+pub use writemem::WriteMemory;
 
 lazy_static::lazy_static! {
     static ref PAGE_SIZE: usize = unsafe { libc::sysconf(libc::_SC_PAGESIZE) as usize };
@@ -71,6 +73,7 @@ pub struct LinuxTarget {
 }
 
 /// This structure is used to pass options to attach
+#[derive(Default)]
 pub struct AttachOptions {
     /// Determines whether process will be killed on debugger exit or crash.
     pub kill_on_exit: bool,
@@ -124,6 +127,11 @@ impl LinuxTarget {
     /// Reads memory from a debuggee process.
     pub fn read(&self) -> ReadMemory {
         ReadMemory::new(&self)
+    }
+
+    /// Writes memory to a debuggee process.
+    pub fn write(&self) -> WriteMemory {
+        WriteMemory::new(&self)
     }
 
     /// Reads the register values from the main thread of a debuggee process.
@@ -489,7 +497,7 @@ mod tests {
 
             match fork() {
                 Ok(ForkResult::Child) => {
-                    *(ptr as *mut u8) = var1;
+                    ptr::write(ptr, var1);
 
                     mprotect(
                         ptr as *mut std::ffi::c_void,
@@ -498,15 +506,12 @@ mod tests {
                     )
                     .expect("Failed to mprotect");
 
-                    // Parent reads memory
-
-                    use std::{thread, time};
+                    // Wait for the parent to read memory before terminating this process
                     thread::sleep(time::Duration::from_millis(300));
 
                     dealloc(ptr, layout);
                 }
                 Ok(ForkResult::Parent { child, .. }) => {
-                    use std::{thread, time};
                     thread::sleep(time::Duration::from_millis(100));
 
                     let (target, _wait_status) =
