@@ -233,7 +233,7 @@ mod tests {
             mman::{mprotect, ProtFlags},
             ptrace, wait,
         },
-        unistd::{self, fork, getppid, ForkResult},
+        unistd::{fork, ForkResult},
     };
     use std::{
         alloc::{alloc_zeroed, dealloc, Layout},
@@ -274,16 +274,22 @@ mod tests {
         let write_var2_op: u8 = 0;
         let write_array = [0u8; 4];
 
-        // Use a pipe for synchronization between parent & child processes.
-        let (read_pipe, write_pipe) = unistd::pipe().unwrap();
-
-        // ptrace::attach() is not allowed to be called on its own process, so we do a fork.
-        // child process writes to the parent's memory instead of the other way around because it's easier to
-        // check results with assert_eq! this way.
         match fork() {
             Ok(ForkResult::Child) => {
-                let parent = getppid();
-                let (target, _wait_stat) = LinuxTarget::attach(parent, Default::default()).unwrap();
+                ptrace::traceme().unwrap();
+
+                // Catch the panic so that we can report back to the original process.
+                let test_res = std::panic::catch_unwind(|| unsafe {
+                    assert_eq!(ptr::read_volatile(&write_var_op), var);
+                    assert_eq!(ptr::read_volatile(&write_var2_op), var2);
+                    assert_eq!(&ptr::read_volatile(&write_array), dyn_array.as_slice());
+                });
+
+                // Return an explicit status code.
+                std::process::exit(if test_res.is_ok() { 0 } else { 100 });
+            }
+            Ok(ForkResult::Parent { child, .. }) => {
+                let (target, _wait_stat) = LinuxTarget::attach(child, Default::default()).unwrap();
 
                 // Write memory to parent's process
                 let write_mem = target
@@ -294,20 +300,17 @@ mod tests {
 
                 unsafe { write_mem.apply_ptrace().expect("Failed to write memory") };
 
-                // Close the write end of the pipe for synchronization with the parent.
-                unistd::close(write_pipe).unwrap();
+                ptrace::detach(child, Some(nix::sys::signal::Signal::SIGCONT)).unwrap();
 
-                ptrace::detach(parent, None).unwrap();
-            }
-            Ok(ForkResult::Parent { .. }) => {
-                // Sleep & wait for the child to send us SIGCONT
-                unistd::close(write_pipe).unwrap();
-                let _ = unistd::read(read_pipe, &mut [0]).unwrap();
+                // Check if the child assertions are successful.
+                let exit_status = wait::waitpid(child, None).unwrap();
 
-                unsafe {
-                    assert_eq!(ptr::read_volatile(&write_var_op), var);
-                    assert_eq!(ptr::read_volatile(&write_var2_op), var2);
-                    assert_eq!(&ptr::read_volatile(&write_array), dyn_array.as_slice());
+                match exit_status {
+                    wait::WaitStatus::Exited(_pid, 0) => {} // normal exit
+                    wait::WaitStatus::Exited(_pid, err_code) => {
+                        panic!("Child exited with an error {}, run this test with --nocapture to see the full output.", err_code);
+                    }
+                    status => panic!("Unexpected child status: {:?}", status),
                 }
             }
             Err(x) => panic!(x),
@@ -336,47 +339,33 @@ mod tests {
             )
         };
 
-        // Use a pipe for synchronization between parent & child processes.
-        let (read_pipe, write_pipe) = unistd::pipe().unwrap();
-
-        // ptrace::attach() is not allowed to be called on its own process, so we do a fork.
-        // child process writes to the parent's memory instead of the other way around because it's easier to
-        // check results with assert_eq! this way.
         match fork() {
             Ok(ForkResult::Child) => {
-                let parent = getppid();
-                let (target, _wait_stat) = LinuxTarget::attach(parent, Default::default()).unwrap();
+                ptrace::traceme().unwrap();
 
-                // Write memory to parent's process
-                let write_mem = target
-                    .write()
-                    .write(&var, write_protected_ptr as usize)
-                    .write(&var2, write_protected_ptr2 as usize);
+                // Catch the panic so that we can report back to the original process.
+                let test_res = std::panic::catch_unwind(|| unsafe {
+                    assert_eq!(ptr::read_volatile(write_protected_ptr), var);
+                    assert_eq!(ptr::read_volatile(write_protected_ptr2), var2);
+                });
 
-                unsafe {
-                    // FIXME: we deliberately use `apply_ptrace()` instead of `apply()` because `apply()` depends on
-                    // `lazy_static` to read the debuggee memory maps, and `lazy_static` uses
-                    // `std::sync::Once` which can have undefined behaviour in a forked process:
-                    // https://github.com/rust-lang/rust/issues/43448
-                    // This can be fixed by either _not_ using fork or not using `lazy_static` while
-                    // reading memory maps.
-                    write_mem.apply_ptrace().expect("Failed to write memory");
-                }
-
-                // Close the write end of the pipe for synchronization with the parent.
-                unistd::close(write_pipe).unwrap();
-
-                ptrace::detach(parent, None).unwrap();
+                // Return an explicit status code.
+                std::process::exit(if test_res.is_ok() { 0 } else { 100 });
             }
             Ok(ForkResult::Parent { child, .. }) => unsafe {
-                // Synchronize with the child - the read end of the pipe will be blocked until it's closed by the child process.
-                unistd::close(write_pipe).unwrap();
-                let _ = unistd::read(read_pipe, &mut [0]).unwrap();
+                let (target, _wait_stat) = LinuxTarget::attach(child, Default::default()).unwrap();
 
-                assert_eq!(ptr::read_volatile(write_protected_ptr), var);
-                assert_eq!(ptr::read_volatile(write_protected_ptr2), var2);
+                // Write memory to the child's process.
+                target
+                    .write()
+                    .write(&var, write_protected_ptr as usize)
+                    .write(&var2, write_protected_ptr2 as usize)
+                    .apply()
+                    .unwrap();
 
-                // 'Unprotect' memory so that it can be deallocated
+                ptrace::detach(child, Some(nix::sys::signal::Signal::SIGCONT)).unwrap();
+
+                // 'Unprotect' memory so that it can be deallocated.
                 mprotect(
                     write_protected_ptr as *mut _,
                     *PAGE_SIZE,
@@ -385,7 +374,16 @@ mod tests {
                 .expect("Failed to mprotect");
                 dealloc(write_protected_ptr as *mut _, layout);
 
-                wait::waitpid(child, None).unwrap();
+                // Check if the child assertions are successful.
+                let exit_status = wait::waitpid(child, None).unwrap();
+
+                match exit_status {
+                    wait::WaitStatus::Exited(_pid, 0) => {} // normal exit
+                    wait::WaitStatus::Exited(_pid, err_code) => {
+                        panic!("Child exited with an error {}, run this test with --nocapture to see the full output.", err_code);
+                    }
+                    status => panic!("Unexpected child status: {:?}", status),
+                }
             },
             Err(x) => panic!(x),
         };
