@@ -24,6 +24,8 @@ You can try some example applications. E.g., a command line interface to some of
 cargo run --example repl
 ```
 
+[![asciicast](https://asciinema.org/a/356800.svg)](https://asciinema.org/a/356800)
+
 ## Contributing
 
 This project exists thanks to all the people who contribute.
