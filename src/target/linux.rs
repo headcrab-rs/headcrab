@@ -2,7 +2,6 @@ mod hardware_breakpoint;
 mod memory;
 mod readmem;
 mod software_breakpoint;
-mod software_breakpoint;
 mod writemem;
 
 use crate::target::thread::Thread;
@@ -26,7 +25,6 @@ pub use hardware_breakpoint::{
     HardwareBreakpoint, HardwareBreakpointError, HardwareBreakpointSize, HardwareBreakpointType,
 };
 pub use readmem::ReadMemory;
-pub use software_breakpoint::Breakpoint;
 pub use software_breakpoint::Breakpoint;
 pub use writemem::WriteMemory;
 
