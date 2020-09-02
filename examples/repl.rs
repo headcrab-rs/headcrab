@@ -344,7 +344,6 @@ mod example {
                             } else {
                                 println!("                 {} {}", name, location);
                             }
-
                             let (_dwarf, unit, dw_die_offset) = frame
                                 .function_debuginfo()
                                 .ok_or_else(|| "No dwarf debuginfo for function".to_owned())?;
