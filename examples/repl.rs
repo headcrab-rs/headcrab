@@ -396,7 +396,6 @@ mod example {
                     Some(false) => {}
                 }
             }
-
             Some("break") | Some("b") => {
                 context.load_debuginfo_if_necessary()?;
                 if let Some(input) = parts.next() {
