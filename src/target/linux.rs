@@ -449,7 +449,7 @@ impl LinuxTarget {
         ptrace::write(
             self.pid(),
             breakpoint.addr as *mut _,
-            breakpoint.saved_instr as *mut _,
+            breakpoint.shadow as *mut _,
         )?;
         regs.rip -= 1;
         self.write_regs(regs)?;

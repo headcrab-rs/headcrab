@@ -35,12 +35,13 @@ impl std::fmt::Display for BreakpointError {
 }
 
 impl std::error::Error for BreakpointError {}
+
 /// Metadata about an active breakpoint
 #[derive(Debug)]
 pub struct BreakpointEntry {
     pub(crate) addr: usize,
     // We only overrite one byte of the instruction
-    pub(crate) saved_instr: i64,
+    pub(crate) shadow: i64,
 }
 
 impl BreakpointEntry {
@@ -48,7 +49,7 @@ impl BreakpointEntry {
     pub fn at(addr: usize, instr: i64) -> Self {
         BreakpointEntry {
             addr,
-            saved_instr: instr,
+            shadow: instr,
         }
     }
 }
