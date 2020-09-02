@@ -30,6 +30,14 @@ mod example {
             }
         }
 
+        fn mut_remote(&mut self) -> Result<&mut LinuxTarget, Box<dyn std::error::Error>> {
+            if let Some(remote) = &mut self.remote {
+                Ok(remote)
+            } else {
+                Err("No running process".to_string().into())
+            }
+        }
+
         fn set_remote(&mut self, remote: LinuxTarget) {
             // FIXME kill/detach old remote
             self.remote = Some(remote);
@@ -387,6 +395,27 @@ mod example {
                         println!("no locals");
                     }
                     Some(false) => {}
+                }
+            }
+
+            Some("break") | Some("b") => {
+                use headcrab::target::Breakpoint;
+                context.load_debuginfo_if_necessary()?;
+                if let Some(input) = parts.next() {
+                    if let Ok(addr) = str::parse::<usize>(input) {
+                        let bp = Breakpoint::at_addr(addr)?;
+                        context.mut_remote()?.set_breakpoint(bp)?;
+                    } else if let Some(symbol) = context.debuginfo().get_symbol_address(input) {
+                        let bp = Breakpoint::at_addr(symbol)?;
+                        context.mut_remote()?.set_breakpoint(bp)?;
+                        println!("Set breakpoint at '{}' ({:#016x})", input, symbol);
+                    } else {
+                        Err(format!("Could not set breakpoint"))?
+                    }
+                } else {
+                    Err(format!(
+                        "Breakpoints need to be set on a symbol or a given address."
+                    ))?
                 }
             }
 
