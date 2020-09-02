@@ -18,9 +18,7 @@ impl Breakpoint {
 
     /// Set a breakpoint at a given address
     pub fn at_addr(addr: usize) -> Result<Self, BreakpointError> {
-        Ok(Breakpoint {
-            addr,
-        })
+        Ok(Breakpoint { addr })
     }
 }
 
@@ -31,12 +29,12 @@ pub enum BreakpointError {
 }
 
 impl std::fmt::Display for BreakpointError {
-    fn  fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(fmt, "{:?}", self)
     }
 }
 
-impl std::error::Error for BreakpointError { }
+impl std::error::Error for BreakpointError {}
 /// Metadata about an active breakpoint
 #[derive(Debug)]
 pub struct BreakpointEntry {
@@ -45,7 +43,7 @@ pub struct BreakpointEntry {
     pub(crate) saved_instr: i64,
 }
 
-impl  BreakpointEntry {
+impl BreakpointEntry {
     /// Create a new breakpoint entry at a given address
     pub fn at(addr: usize, instr: i64) -> Self {
         BreakpointEntry {

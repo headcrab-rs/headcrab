@@ -1,28 +1,28 @@
-mod software_breakpoint;
 mod hardware_breakpoint;
 mod memory;
 mod readmem;
+mod software_breakpoint;
 mod writemem;
 
-use std::collections::HashMap;
 use crate::target::thread::Thread;
 use crate::target::unix::{self, UnixTarget};
 use nix::sys::ptrace;
 use nix::unistd::{getpid, Pid};
 use procfs::process::{Process, Task};
 use procfs::ProcError;
+use software_breakpoint::BreakpointEntry;
+use std::collections::HashMap;
 use std::{
     ffi::CString,
     fs::File,
     io::{BufRead, BufReader},
 };
-use software_breakpoint::BreakpointEntry;
 
 pub use hardware_breakpoint::{
     HardwareBreakpoint, HardwareBreakpointError, HardwareBreakpointSize, HardwareBreakpointType,
 };
-pub use software_breakpoint::Breakpoint;
 pub use readmem::ReadMemory;
+pub use software_breakpoint::Breakpoint;
 pub use writemem::WriteMemory;
 
 lazy_static::lazy_static! {
@@ -96,11 +96,14 @@ impl UnixTarget for LinuxTarget {
         match status {
             // We may have hit a user defined breakpoint
             nix::sys::wait::WaitStatus::Stopped(_, nix::sys::signal::Signal::SIGTRAP) => {
-                if let Some(bp_entry) = self.breakpoints.get(&(self.read_regs().unwrap().rip as usize - 1)) {
+                if let Some(bp_entry) = self
+                    .breakpoints
+                    .get(&(self.read_regs().unwrap().rip as usize - 1))
+                {
                     self.restore_breakpoint(bp_entry)?;
                 };
-            },
-            _ => ()
+            }
+            _ => (),
         };
         Ok(status)
     }
@@ -425,19 +428,29 @@ impl LinuxTarget {
         Err(Box::new(HardwareBreakpointError::UnsupportedPlatform))
     }
 
-    pub fn set_breakpoint(&mut self, breakpoint: Breakpoint) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn set_breakpoint(
+        &mut self,
+        breakpoint: Breakpoint,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         const INT3: libc::c_long = 0xcc;
-        let instr = ptrace::read(self.pid(),breakpoint.addr as *mut _)?;
-        let b_entry = BreakpointEntry::at(breakpoint.addr,  instr);
+        let instr = ptrace::read(self.pid(), breakpoint.addr as *mut _)?;
+        let b_entry = BreakpointEntry::at(breakpoint.addr, instr);
         let trap_instr = (instr & !0xff) | INT3;
         ptrace::write(self.pid(), breakpoint.addr as *mut _, trap_instr as *mut _)?;
         self.breakpoints.insert(breakpoint.addr, b_entry);
         Ok(())
     }
 
-    pub fn restore_breakpoint(&self, breakpoint: &BreakpointEntry) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn restore_breakpoint(
+        &self,
+        breakpoint: &BreakpointEntry,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let mut regs = self.read_regs()?;
-        ptrace::write(self.pid(), breakpoint.addr as *mut _, breakpoint.saved_instr as *mut _)?;
+        ptrace::write(
+            self.pid(),
+            breakpoint.addr as *mut _,
+            breakpoint.saved_instr as *mut _,
+        )?;
         regs.rip -= 1;
         self.write_regs(regs)?;
         Ok(())
