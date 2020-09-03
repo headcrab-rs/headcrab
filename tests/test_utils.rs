@@ -37,7 +37,7 @@ pub fn launch(path: &str) -> LinuxTarget {
 pub fn continue_to_end(target: &LinuxTarget) {
     match target.unpause().unwrap() {
         nix::sys::wait::WaitStatus::Exited(_, 0) => {}
-        status => panic!("Status: {:?}", status),
+        status => panic!("Unexpected signal: Status: {:?}", status),
     }
 }
 

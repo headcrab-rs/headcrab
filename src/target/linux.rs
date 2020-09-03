@@ -99,9 +99,12 @@ impl UnixTarget for LinuxTarget {
                 if let Some(bp) = self
                     .breakpoints
                     .borrow_mut()
-                    .get_mut(&(self.read_regs().unwrap().rip as usize - 1))
+                    .get_mut(&(self.read_regs()?.rip as usize - 1))
                 {
+                    // Restore the program to it's uninstrumented state
                     self.restore_breakpoint(bp)?;
+                    // Find a way to let the user do things from now on, and force
+                    // calling bp.set()? somehow
                 };
             }
             _ => (),
@@ -431,15 +434,35 @@ impl LinuxTarget {
 
     /// Set a breakpoint at a given address
     /// This modifies the Target's memory by writting an INT3 instr. at `addr`
-    pub fn set_breakpoint(&self, addr: usize) -> Result<Breakpoint, Box<dyn std::error::Error>> {
-        let mut bp = Breakpoint::new(addr, self.pid());
+    pub fn register_breakpoint(
+        &self,
+        addr: usize,
+    ) -> Result<Breakpoint, Box<dyn std::error::Error>> {
+        let bp = Breakpoint::new(addr, self.pid())?;
+        let existing_breakpoint = {
+            let hdl = self.breakpoints.borrow();
+            hdl.get(&addr).and_then(|val| Some(val.clone()))
+        };
+
+        let mut bp = match existing_breakpoint {
+            None => {
+                self.breakpoints.borrow_mut().insert(addr, bp);
+                bp
+            }
+            // If there is already a breakpoint set, we give back the existing one
+            Some(breakpoint) => breakpoint.clone(),
+        };
         bp.set()?;
-        self.breakpoints.borrow_mut().insert(addr, bp);
+        //self.breakpoints.borrow_mut().insert(addr, bp);
         Ok(bp)
     }
 
-    /// Restore the instruction shadowed by `breakpoint`
+    /// Restore the instruction shadowed by `bp` & rollback the P.C by 1
     fn restore_breakpoint(&self, bp: &mut Breakpoint) -> Result<(), Box<dyn std::error::Error>> {
+        if !bp.is_active() {
+            // Fail silently if restoring an inactive breakpoint
+            return Ok(());
+        }
         // restore the instruction
         bp.restore()?;
 
@@ -449,6 +472,14 @@ impl LinuxTarget {
         self.write_regs(regs)?;
 
         Ok(())
+    }
+
+    /// Disable the breakpoint. Call `set()` on the Breakpoint to enable it again
+    pub fn unregister_breakpoint(
+        &self,
+        bp: &mut Breakpoint,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        bp.restore().map_err(|e| e.into())
     }
 
     // Temporary function until ptrace_peekuser is fixed in nix crate

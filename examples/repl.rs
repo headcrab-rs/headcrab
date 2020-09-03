@@ -402,9 +402,9 @@ mod example {
                 context.load_debuginfo_if_necessary()?;
                 if let Some(input) = parts.next() {
                     if let Ok(addr) = str::parse::<usize>(input) {
-                        context.mut_remote()?.set_breakpoint(addr)?;
+                        context.mut_remote()?.register_breakpoint(addr)?;
                     } else if let Some(symbol) = context.debuginfo().get_symbol_address(input) {
-                        context.mut_remote()?.set_breakpoint(symbol)?;
+                        context.mut_remote()?.register_breakpoint(symbol)?;
                         println!("Set breakpoint at '{}' ({:#016x})", input, symbol);
                     } else {
                         Err(format!("Could not set breakpoint"))?

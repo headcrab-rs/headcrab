@@ -6,54 +6,78 @@
 use nix::sys::ptrace;
 use nix::unistd::Pid;
 const INT3: libc::c_long = 0xcc;
+/*
+pub struct Breakpoint2 {
+    bp: Breakpoint,
+    callback: Box<dyn FnMut(i32, i32)>,
+}
 
-#[derive(Debug, Clone, Copy)]
+impl Breakpoint2 {
+    pub fn new(
+        addr: usize,
+        pid: Pid,
+        callback: Box<dyn FnMut(i32, i32)>,
+    ) -> Result<Self, BreakpointError> {
+        let bp = Breakpoint::new(addr, pid)?;
+        Ok(Breakpoint2 { bp, callback })
+    }
+
+    fn test() {
+        let cb = |i1, i2| {
+            i1 + i2;
+        };
+        Breakpoint2::new(123, nix::unistd::Pid::this(), Box::new(cb));
+    }
+}
+*/
+
+#[derive(Debug, Copy, Clone)]
 pub struct Breakpoint {
     /// The address at which the debugger should insert this breakpoint
     pub addr: usize,
     /// The shadowed variable
-    pub(crate) shadow: Option<i64>,
+    pub(crate) shadow: i64,
     pid: Pid,
 }
 
 impl Breakpoint {
     /// Set a breakpoint at a given address
-    pub(crate) fn new(addr: usize, pid: Pid) -> Self {
-        Breakpoint {
-            addr,
-            shadow: None,
-            pid,
-        }
+    pub(crate) fn new(addr: usize, pid: Pid) -> Result<Self, BreakpointError> {
+        let shadow = ptrace::read(pid, addr as *mut _)?;
+        Ok(Breakpoint { addr, shadow, pid })
     }
 
     /// Put in place the trap instruction
     pub fn set(&mut self) -> Result<(), BreakpointError> {
+        if self.is_active() {
+            // We don't allow setting breakpoint twice
+            return Ok(());
+        }
         let instr = ptrace::read(self.pid, self.addr as *mut _)?;
-        self.shadow = Some(instr);
+        self.shadow = instr;
         let trap_instr = (instr & !0xff) | INT3;
         ptrace::write(self.pid, self.addr as *mut _, trap_instr as *mut _)?;
+        println!("[{:#x}] set breakpoint", self.addr);
         Ok(())
     }
 
     /// Restore the previous instruction for the breakpoint.
-    pub fn restore(&mut self) -> Result<(), BreakpointError> {
-        if let None = self.shadow {
+    pub fn restore(&self) -> Result<(), BreakpointError> {
+        if !self.is_active() {
             // Tried to restore a breakpoint that isn't set, fail silently
             return Ok(());
         }
 
-        ptrace::write(
-            self.pid,
-            self.addr as *mut _,
-            // Checked above
-            self.shadow.take().unwrap() as *mut _,
-        )
-        .map_err(|e| e.into())
+        ptrace::write(self.pid, self.addr as *mut _, self.shadow as *mut _)?;
+        Ok(())
     }
 
-    /// Delete the breakpoint, clearing the trap instruction
-    pub fn remove(mut self) -> Result<(), BreakpointError> {
-        self.restore()
+    /// Wether this breakpoint has instrumented the target's code
+    pub fn is_active(&self) -> bool {
+        let instr = ptrace::read(self.pid, self.addr as *mut _).unwrap();
+        let value = instr & !0xff;
+        dbg!(value);
+        (instr & 0xff) == INT3
     }
 }
 
