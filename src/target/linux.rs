@@ -11,9 +11,7 @@ use nix::sys::wait::{waitpid, WaitStatus};
 use nix::unistd::{getpid, Pid};
 use procfs::process::{Process, Task};
 use procfs::ProcError;
-use software_breakpoint::BreakpointEntry;
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::collections::HashMap;
 use std::{
     ffi::CString,
