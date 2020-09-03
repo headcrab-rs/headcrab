@@ -72,7 +72,7 @@ pub fn patch_breakpoint(target: &LinuxTarget, debuginfo: &RelocatedDwarf) {
 #[cfg(target_os = "linux")]
 #[allow(dead_code)]
 pub fn current_ip(target: &LinuxTarget) -> u64 {
-    target.read_regs().expect("could not read registers").rip
+    target.read_regs().expect("could not read registers").ip()
 }
 
 #[cfg(target_os = "linux")]

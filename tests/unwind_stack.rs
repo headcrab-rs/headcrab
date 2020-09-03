@@ -35,11 +35,11 @@ fn unwind_stack() -> CrabResult<()> {
     // Read stack
     let mut stack: [usize; 256] = [0; 256];
     unsafe {
-        target.read().read(&mut stack, regs.rsp as usize).apply()?;
+        target.read().read(&mut stack, regs.sp() as usize).apply()?;
     }
 
     let call_stack: Vec<_> =
-        headcrab::symbol::unwind::naive_unwinder(&debuginfo, &stack[..], regs.rip as usize)
+        headcrab::symbol::unwind::naive_unwinder(&debuginfo, &stack[..], regs.ip() as usize)
             .map(|func| {
                 debuginfo
                     .get_address_symbol_name(func)
@@ -54,9 +54,9 @@ fn unwind_stack() -> CrabResult<()> {
     let call_stack: Vec<_> = headcrab::symbol::unwind::frame_pointer_unwinder(
         &debuginfo,
         &stack[..],
-        regs.rip as usize,
-        regs.rsp as usize,
-        regs.rbp as usize,
+        regs.ip() as usize,
+        regs.sp() as usize,
+        regs.bp().unwrap() as usize,
     )
     .map(|func| {
         debuginfo

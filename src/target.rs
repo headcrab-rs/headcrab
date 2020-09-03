@@ -21,6 +21,9 @@ pub use windows::*;
 mod registers;
 mod thread;
 
+pub use registers::Registers;
+pub use thread::Thread;
+
 #[derive(Debug)]
 pub struct MemoryMap {
     /// Start and end range of the mapped memory.
