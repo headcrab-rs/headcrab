@@ -3,22 +3,57 @@
 //! replacing an instruction with one that causes a signal to be raised by the
 //! cpu.
 
+use nix::sys::ptrace;
+use nix::unistd::Pid;
+const INT3: libc::c_long = 0xcc;
+
 #[derive(Debug, Clone, Copy)]
 pub struct Breakpoint {
     /// The address at which the debugger should insert this breakpoint
     pub addr: usize,
+    /// The shadowed variable
+    pub(crate) shadow: Option<i64>,
+    pid: Pid,
 }
 
 impl Breakpoint {
-    /// Set a breakpoint at a given Symbol
-    pub fn at_symbol(_symbol: String) -> Result<Self, BreakpointError> {
-        //TODO(galileo) Update to look for a given symbol in the target's dwarf info
-        Err(BreakpointError::NoSuchSymbol)
+    /// Set a breakpoint at a given address
+    pub(crate) fn new(addr: usize, pid: Pid) -> Self {
+        Breakpoint {
+            addr,
+            shadow: None,
+            pid,
+        }
     }
 
-    /// Set a breakpoint at a given address
-    pub fn at_addr(addr: usize) -> Result<Self, BreakpointError> {
-        Ok(Breakpoint { addr })
+    /// Put in place the trap instruction
+    pub fn set(&mut self) -> Result<(), BreakpointError> {
+        let instr = ptrace::read(self.pid, self.addr as *mut _)?;
+        self.shadow = Some(instr);
+        let trap_instr = (instr & !0xff) | INT3;
+        ptrace::write(self.pid, self.addr as *mut _, trap_instr as *mut _)?;
+        Ok(())
+    }
+
+    /// Restore the previous instruction for the breakpoint.
+    pub fn restore(&mut self) -> Result<(), BreakpointError> {
+        if let None = self.shadow {
+            // Tried to restore a breakpoint that isn't set, fail silently
+            return Ok(());
+        }
+
+        ptrace::write(
+            self.pid,
+            self.addr as *mut _,
+            // Checked above
+            self.shadow.take().unwrap() as *mut _,
+        )
+        .map_err(|e| e.into())
+    }
+
+    /// Delete the breakpoint, clearing the trap instruction
+    pub fn remove(mut self) -> Result<(), BreakpointError> {
+        self.restore()
     }
 }
 
@@ -26,6 +61,13 @@ impl Breakpoint {
 pub enum BreakpointError {
     NoSuchSymbol,
     IoError,
+    NixError(nix::Error),
+}
+
+impl std::convert::From<nix::Error> for BreakpointError {
+    fn from(error: nix::Error) -> Self {
+        BreakpointError::NixError(error)
+    }
 }
 
 impl std::fmt::Display for BreakpointError {
@@ -35,21 +77,3 @@ impl std::fmt::Display for BreakpointError {
 }
 
 impl std::error::Error for BreakpointError {}
-
-/// Metadata about an active breakpoint
-#[derive(Debug)]
-pub struct BreakpointEntry {
-    pub(crate) addr: usize,
-    // We only overrite one byte of the instruction
-    pub(crate) shadow: i64,
-}
-
-impl BreakpointEntry {
-    /// Create a new breakpoint entry at a given address
-    pub fn at(addr: usize, instr: i64) -> Self {
-        BreakpointEntry {
-            addr,
-            shadow: instr,
-        }
-    }
-}

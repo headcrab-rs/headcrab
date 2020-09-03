@@ -10,7 +10,7 @@ use nix::sys::ptrace;
 use nix::unistd::{getpid, Pid};
 use procfs::process::{Process, Task};
 use procfs::ProcError;
-use software_breakpoint::BreakpointEntry;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::{
     ffi::CString,
@@ -74,7 +74,7 @@ impl Thread for LinuxThread {
 pub struct LinuxTarget {
     pid: Pid,
     hardware_breakpoints: [Option<HardwareBreakpoint>; SUPPORTED_HARDWARE_BREAKPOINTS],
-    breakpoints: HashMap<usize, BreakpointEntry>,
+    breakpoints: RefCell<HashMap<usize, Breakpoint>>,
 }
 
 /// This structure is used to pass options to attach
@@ -96,11 +96,12 @@ impl UnixTarget for LinuxTarget {
         match status {
             // We may have hit a user defined breakpoint
             nix::sys::wait::WaitStatus::Stopped(_, nix::sys::signal::Signal::SIGTRAP) => {
-                if let Some(bp_entry) = self
+                if let Some(bp) = self
                     .breakpoints
-                    .get(&(self.read_regs().unwrap().rip as usize - 1))
+                    .borrow_mut()
+                    .get_mut(&(self.read_regs().unwrap().rip as usize - 1))
                 {
-                    self.restore_breakpoint(bp_entry)?;
+                    self.restore_breakpoint(bp)?;
                 };
             }
             _ => (),
@@ -114,7 +115,7 @@ impl LinuxTarget {
         Self {
             pid,
             hardware_breakpoints: Default::default(),
-            breakpoints: HashMap::new(),
+            breakpoints: RefCell::new(HashMap::new()),
         }
     }
 
@@ -428,31 +429,25 @@ impl LinuxTarget {
         Err(Box::new(HardwareBreakpointError::UnsupportedPlatform))
     }
 
-    pub fn set_breakpoint(
-        &mut self,
-        breakpoint: Breakpoint,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        const INT3: libc::c_long = 0xcc;
-        let instr = ptrace::read(self.pid(), breakpoint.addr as *mut _)?;
-        let b_entry = BreakpointEntry::at(breakpoint.addr, instr);
-        let trap_instr = (instr & !0xff) | INT3;
-        ptrace::write(self.pid(), breakpoint.addr as *mut _, trap_instr as *mut _)?;
-        self.breakpoints.insert(breakpoint.addr, b_entry);
-        Ok(())
+    /// Set a breakpoint at a given address
+    /// This modifies the Target's memory by writting an INT3 instr. at `addr`
+    pub fn set_breakpoint(&self, addr: usize) -> Result<Breakpoint, Box<dyn std::error::Error>> {
+        let mut bp = Breakpoint::new(addr, self.pid());
+        bp.set()?;
+        self.breakpoints.borrow_mut().insert(addr, bp);
+        Ok(bp)
     }
 
-    pub fn restore_breakpoint(
-        &self,
-        breakpoint: &BreakpointEntry,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    /// Restore the instruction shadowed by `breakpoint`
+    fn restore_breakpoint(&self, bp: &mut Breakpoint) -> Result<(), Box<dyn std::error::Error>> {
+        // restore the instruction
+        bp.restore()?;
+
+        // rollback the P.C
         let mut regs = self.read_regs()?;
-        ptrace::write(
-            self.pid(),
-            breakpoint.addr as *mut _,
-            breakpoint.shadow as *mut _,
-        )?;
         regs.rip -= 1;
         self.write_regs(regs)?;
+
         Ok(())
     }
 

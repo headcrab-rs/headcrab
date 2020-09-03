@@ -399,15 +399,12 @@ mod example {
             }
 
             Some("break") | Some("b") => {
-                use headcrab::target::Breakpoint;
                 context.load_debuginfo_if_necessary()?;
                 if let Some(input) = parts.next() {
                     if let Ok(addr) = str::parse::<usize>(input) {
-                        let bp = Breakpoint::at_addr(addr)?;
-                        context.mut_remote()?.set_breakpoint(bp)?;
+                        context.mut_remote()?.set_breakpoint(addr)?;
                     } else if let Some(symbol) = context.debuginfo().get_symbol_address(input) {
-                        let bp = Breakpoint::at_addr(symbol)?;
-                        context.mut_remote()?.set_breakpoint(bp)?;
+                        context.mut_remote()?.set_breakpoint(symbol)?;
                         println!("Set breakpoint at '{}' ({:#016x})", input, symbol);
                     } else {
                         Err(format!("Could not set breakpoint"))?
