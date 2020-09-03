@@ -1,4 +1,6 @@
 //! This is a simple test for waiting for a fixed breakpoint in a child process.
+//! Here the testee has hardcoded INT3 instructions that should trigger breaks
+//! so that headcrab can gain control at certain key points of execution.
 
 mod test_utils;
 
