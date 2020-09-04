@@ -456,6 +456,16 @@ impl LinuxTarget {
         Ok(bp)
     }
 
+    pub fn single_step(&self) -> Result<(), Box<dyn std::error::Error>> {
+        nix::sys::ptrace::step(self.pid(), None).map_err(|e| Box::new(e))?;
+        let status = nix::sys::wait::waitpid(self.pid(), None)?;
+        assert_eq!(
+            status,
+            nix::sys::wait::WaitStatus::Stopped(self.pid(), nix::sys::signal::SIGTRAP)
+        );
+        Ok(())
+    }
+
     /// Restore the instruction shadowed by `bp` & rollback the P.C by 1
     fn restore_breakpoint(&self, bp: &mut Breakpoint) -> Result<(), Box<dyn std::error::Error>> {
         if !bp.is_active() {

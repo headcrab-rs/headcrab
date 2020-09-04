@@ -63,10 +63,7 @@ fn multiple_breakpoints() -> Result<(), Box<dyn std::error::Error>> {
 
     // make sure we hit the breakpoint
     let status = target.unpause()?;
-    assert_eq!(
-        status,
-        nix::sys::wait::WaitStatus::Stopped(target.pid(), nix::sys::signal::SIGTRAP)
-    );
+    assert_eq!(status, test_utils::ws_sigtrap(&target));
     let mut regs = target.read_regs()?;
     assert_eq!(regs.rip as usize, main_addr);
 
@@ -80,6 +77,29 @@ fn multiple_breakpoints() -> Result<(), Box<dyn std::error::Error>> {
     let mut bp3 = target.set_breakpoint(main_addr + 4)?;
     bp3.set()?;
     bp3.disable()?;
+    test_utils::continue_to_end(&target);
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+// Make sure that calling single_step advances the P.C by 1,
+// and gives back control
+fn single_step() -> Result<(), Box<dyn std::error::Error>> {
+    test_utils::ensure_testees();
+    let target = test_utils::launch(BIN_PATH);
+    let debuginfo = RelocatedDwarf::from_maps(&target.memory_maps()?)?;
+    let main_addr = debuginfo
+        .get_symbol_address("main")
+        .expect("No 'main' symbol in target program.");
+    let _main = target.set_breakpoint(main_addr)?;
+
+    // start the program
+    target.unpause()?;
+    assert_eq!(test_utils::current_rip(&target), main_addr as u64);
+    target.single_step()?;
+    assert_eq!(test_utils::current_rip(&target), main_addr as u64 + 1);
+    //assert_eq!(status, test_utils::ws_sigtrap(&target));
     test_utils::continue_to_end(&target);
     Ok(())
 }
