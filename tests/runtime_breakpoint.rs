@@ -29,7 +29,7 @@ fn runtime_breakpoint() -> Result<(), Box<dyn std::error::Error>> {
         .get_symbol_address("main")
         .expect("No 'main' symbol");
     let _breakpoint = target
-        .register_breakpoint(main_addr)
+        .set_breakpoint(main_addr)
         .expect("Cannot set breakpoint");
 
     //assert!(breakpoint.is_active());
@@ -56,10 +56,10 @@ fn multiple_breakpoints() -> Result<(), Box<dyn std::error::Error>> {
         .get_symbol_address("main")
         .expect("No 'main' symbol");
     // set a breakpoint at main
-    let breakpoint = target.register_breakpoint(main_addr)?;
+    let breakpoint = target.set_breakpoint(main_addr)?;
     assert!(breakpoint.is_active());
     // Test that duplicate breakpoints do no harm
-    let breakpoint2 = target.register_breakpoint(main_addr)?;
+    let breakpoint2 = target.set_breakpoint(main_addr)?;
 
     // make sure we hit the breakpoint
     let status = target.unpause()?;
@@ -73,13 +73,13 @@ fn multiple_breakpoints() -> Result<(), Box<dyn std::error::Error>> {
     //  Let's go a few instructions back and see if disabling the breakpoint works
     regs.rip -= 3;
     target.write_regs(regs)?;
-    breakpoint2.restore()?;
+    breakpoint2.disable()?;
 
     // Same, let's check that creating a new breakpoint and unsetting it right away
     // disarms the trap
-    let mut bp3 = target.register_breakpoint(main_addr + 4)?;
+    let mut bp3 = target.set_breakpoint(main_addr + 4)?;
     bp3.set()?;
-    bp3.restore()?;
+    bp3.disable()?;
     test_utils::continue_to_end(&target);
     Ok(())
 }

@@ -434,10 +434,9 @@ impl LinuxTarget {
 
     /// Set a breakpoint at a given address
     /// This modifies the Target's memory by writting an INT3 instr. at `addr`
-    pub fn register_breakpoint(
-        &self,
-        addr: usize,
-    ) -> Result<Breakpoint, Box<dyn std::error::Error>> {
+    /// The returned Breakpoint object can then be used to disable the breakpoint
+    /// or query its state
+    pub fn set_breakpoint(&self, addr: usize) -> Result<Breakpoint, Box<dyn std::error::Error>> {
         let bp = Breakpoint::new(addr, self.pid())?;
         let existing_breakpoint = {
             let hdl = self.breakpoints.borrow();
@@ -464,7 +463,7 @@ impl LinuxTarget {
             return Ok(());
         }
         // restore the instruction
-        bp.restore()?;
+        bp.disable()?;
 
         // rollback the P.C
         let mut regs = self.read_regs()?;
@@ -479,7 +478,7 @@ impl LinuxTarget {
         &self,
         bp: &mut Breakpoint,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        bp.restore().map_err(|e| e.into())
+        bp.disable().map_err(|e| e.into())
     }
 
     // Temporary function until ptrace_peekuser is fixed in nix crate

@@ -46,23 +46,23 @@ impl Breakpoint {
         let shadow = ptrace::read(pid, addr as *mut _)?;
         Ok(Breakpoint { addr, shadow, pid })
     }
-
     /// Put in place the trap instruction
     pub fn set(&mut self) -> Result<(), BreakpointError> {
         if self.is_active() {
             // We don't allow setting breakpoint twice
+            // else it would be possible to create a breakpoint that
+            // would 'restore' an `INT3` instruction
             return Ok(());
         }
         let instr = ptrace::read(self.pid, self.addr as *mut _)?;
         self.shadow = instr;
         let trap_instr = (instr & !0xff) | INT3;
         ptrace::write(self.pid, self.addr as *mut _, trap_instr as *mut _)?;
-        println!("[{:#x}] set breakpoint", self.addr);
         Ok(())
     }
 
     /// Restore the previous instruction for the breakpoint.
-    pub fn restore(&self) -> Result<(), BreakpointError> {
+    pub fn disable(&self) -> Result<(), BreakpointError> {
         if !self.is_active() {
             // Tried to restore a breakpoint that isn't set, fail silently
             return Ok(());
@@ -76,7 +76,6 @@ impl Breakpoint {
     pub fn is_active(&self) -> bool {
         let instr = ptrace::read(self.pid, self.addr as *mut _).unwrap();
         let value = instr & !0xff;
-        dbg!(value);
         (instr & 0xff) == INT3
     }
 }
