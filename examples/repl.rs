@@ -10,11 +10,11 @@ fn main() {
 
 #[cfg(target_os = "linux")]
 mod example {
-    use rustyline::{hint::Hinter, validate::Validator, CompletionType, Helper};
+    use rustyline::CompletionType;
 
     use repl_tools::{define_repl_cmds, FileNameArgument, NullArgument};
 
-    define_repl_cmds!(ReplHelper {
+    define_repl_cmds!(enum ReplCommand {
         /// Start a program to debug
         exec: FileNameArgument,
         /// Attach to an existing program
@@ -40,13 +40,7 @@ mod example {
         exit|quit|q: NullArgument,
     });
 
-    struct ReplHelper;
-
-    impl Helper for ReplHelper {}
-
-    impl Validator for ReplHelper {}
-
-    impl Hinter for ReplHelper {}
+    type ReplHelper = repl_tools::MakeHelper<ReplCommand>;
 
     use headcrab::{
         symbol::{DisassemblySource, RelocatedDwarf},
@@ -94,7 +88,7 @@ mod example {
                 .completion_type(CompletionType::List)
                 .build(),
         );
-        rl.set_helper(Some(ReplHelper));
+        rl.set_helper(Some(ReplHelper::default()));
 
         let mut context = Context {
             remote: None,
@@ -196,7 +190,7 @@ mod example {
         let mut parts = command.trim().split(' ').map(str::trim);
         match parts.next() {
             Some("h") | Some("help") => {
-                ReplHelper::print_help(std::io::stdout()).unwrap();
+                ReplCommand::print_help(std::io::stdout()).unwrap();
             }
             Some("exec") => {
                 if let Some(cmd) = parts.next() {

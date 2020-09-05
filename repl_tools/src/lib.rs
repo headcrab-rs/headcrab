@@ -1,10 +1,18 @@
-use rustyline::completion::{FilenameCompleter, Pair};
+use std::{borrow::Cow, marker::PhantomData};
+
+use rustyline::{
+    completion::{Completer, FilenameCompleter, Pair},
+    highlight::Highlighter,
+    hint::Hinter,
+    validate::Validator,
+    Helper,
+};
 
 #[doc(hidden)]
 pub use rustyline as __rustyline;
 
 pub trait HighlightAndComplete {
-    fn highlight<'l>(line: &'l str) -> std::borrow::Cow<'l, str>;
+    fn highlight<'l>(line: &'l str) -> Cow<'l, str>;
     fn complete(
         line: &str,
         pos: usize,
@@ -12,10 +20,55 @@ pub trait HighlightAndComplete {
     ) -> rustyline::Result<(usize, Vec<Pair>)>;
 }
 
+pub struct MakeHelper<T: HighlightAndComplete>(PhantomData<T>);
+
+impl<T: HighlightAndComplete> Default for MakeHelper<T> {
+    fn default() -> Self {
+        Self(PhantomData)
+    }
+}
+
+impl<T: HighlightAndComplete> Helper for MakeHelper<T> {}
+
+impl<T: HighlightAndComplete> Validator for MakeHelper<T> {}
+
+impl<T: HighlightAndComplete> Hinter for MakeHelper<T> {}
+
+impl<T: HighlightAndComplete> Highlighter for MakeHelper<T> {
+    fn highlight<'l>(&self, line: &'l str, _pos: usize) -> Cow<'l, str> {
+        T::highlight(line)
+    }
+
+    fn highlight_prompt<'b, 's: 'b, 'p: 'b>(
+        &'s self,
+        prompt: &'p str,
+        _default: bool,
+    ) -> std::borrow::Cow<'b, str> {
+        format!("\x1b[90m{}\x1b[0m", prompt).into()
+    }
+
+    fn highlight_char(&self, _line: &str, _pos: usize) -> bool {
+        true
+    }
+}
+
+impl<T: HighlightAndComplete> Completer for MakeHelper<T> {
+    type Candidate = Pair;
+
+    fn complete(
+        &self,
+        line: &str,
+        pos: usize,
+        ctx: &rustyline::Context<'_>,
+    ) -> rustyline::Result<(usize, Vec<Self::Candidate>)> {
+        T::complete(line, pos, ctx)
+    }
+}
+
 pub struct NullArgument(());
 
 impl HighlightAndComplete for NullArgument {
-    fn highlight<'l>(line: &'l str) -> std::borrow::Cow<'l, str> {
+    fn highlight<'l>(line: &'l str) -> Cow<'l, str> {
         line.into()
     }
 
@@ -32,7 +85,7 @@ impl HighlightAndComplete for NullArgument {
 pub struct FileNameArgument;
 
 impl HighlightAndComplete for FileNameArgument {
-    fn highlight<'l>(line: &'l str) -> std::borrow::Cow<'l, str> {
+    fn highlight<'l>(line: &'l str) -> Cow<'l, str> {
         let path = std::path::Path::new(line.trim());
         if path.is_file() {
             // FIXME better colors
@@ -55,13 +108,15 @@ impl HighlightAndComplete for FileNameArgument {
 
 #[macro_export]
 macro_rules! define_repl_cmds {
-    ($helper:ty {
+    (enum $command:ident {
         $(
             #[doc = $doc:literal]
             $($field:ident)|+: $argument_helper:ty,
         )*
     }) => {
-        impl $helper {
+        enum $command {}
+
+        impl $command {
             fn print_help(mut w: impl std::io::Write) -> std::io::Result<()> {
                 $(
                     writeln!(w, "\x1b[1m{}\x1b[0m -- {}", concat!(stringify!($($field)|+)), $doc.trim())?;
@@ -70,17 +125,12 @@ macro_rules! define_repl_cmds {
             }
         }
 
-        impl $crate::__rustyline::highlight::Highlighter for $helper {
-            fn highlight<'l>(&self, line: &'l str, pos: usize) -> std::borrow::Cow<'l, str> {
+        impl $crate::HighlightAndComplete for $command {
+            fn highlight<'l>(line: &'l str) -> std::borrow::Cow<'l, str> {
                 let cmd_len = line.find(' ').unwrap_or(line.len());
                 let (chosen_cmd, rest) = line.split_at(cmd_len);
                 $(
                     if [$(stringify!($field)),+][..].iter().copied().any(|cmd| cmd == chosen_cmd) {
-                        let pos = if pos < cmd_len {
-                            usize::max_value()
-                        } else {
-                            pos - cmd_len
-                        };
                         let highlighted_argument =
                             <$argument_helper as $crate::HighlightAndComplete>::highlight(rest);
                         return format!("\x1b[93m{}\x1b[0m{}", chosen_cmd, highlighted_argument).into();
@@ -89,28 +139,11 @@ macro_rules! define_repl_cmds {
                 line.into()
             }
 
-            fn highlight_prompt<'b, 's: 'b, 'p: 'b>(
-                &'s self,
-                prompt: &'p str,
-                _default: bool,
-            ) -> std::borrow::Cow<'b, str> {
-                format!("\x1b[90m{}\x1b[0m", prompt).into()
-            }
-
-            fn highlight_char(&self, _line: &str, _pos: usize) -> bool {
-                true
-            }
-        }
-
-        impl $crate::__rustyline::completion::Completer for $helper {
-            type Candidate = $crate::__rustyline::completion::Pair;
-
             fn complete(
-                &self,
                 line: &str,
                 pos: usize,
                 ctx: &$crate::__rustyline::Context<'_>,
-            ) -> $crate::__rustyline::Result<(usize, Vec<Self::Candidate>)> {
+            ) -> $crate::__rustyline::Result<(usize, Vec<$crate::__rustyline::completion::Pair>)> {
                 let cmd_len = line.find(' ').unwrap_or(line.len());
                 if pos <= cmd_len {
                     let candidates = [$($(stringify!($field)),+),*][..]
