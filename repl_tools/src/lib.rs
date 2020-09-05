@@ -1,26 +1,38 @@
-use rustyline::completion::{Completer, FilenameCompleter, Pair};
+use rustyline::completion::{FilenameCompleter, Pair};
 
 #[doc(hidden)]
 pub use rustyline as __rustyline;
 
-#[derive(Default)]
-pub struct NullArgument;
+pub trait HighlightAndComplete {
+    fn highlight<'l>(line: &'l str) -> std::borrow::Cow<'l, str>;
+    fn complete(
+        line: &str,
+        pos: usize,
+        ctx: &rustyline::Context<'_>,
+    ) -> rustyline::Result<(usize, Vec<Pair>)>;
+}
 
-impl NullArgument {
-    pub fn highlight<'l>(&self, line: &'l str, _pos: usize) -> std::borrow::Cow<'l, str> {
+pub struct NullArgument(());
+
+impl HighlightAndComplete for NullArgument {
+    fn highlight<'l>(line: &'l str) -> std::borrow::Cow<'l, str> {
         line.into()
+    }
+
+    fn complete(
+        line: &str,
+        pos: usize,
+        ctx: &rustyline::Context<'_>,
+    ) -> rustyline::Result<(usize, Vec<Pair>)> {
+        let _ = (line, pos, ctx);
+        Ok((0, vec![]))
     }
 }
 
-impl Completer for NullArgument {
-    type Candidate = Pair;
-}
+pub struct FileNameArgument;
 
-#[derive(Default)]
-pub struct FileNameArgument(FilenameCompleter);
-
-impl FileNameArgument {
-    pub fn highlight<'l>(&self, line: &'l str, _pos: usize) -> std::borrow::Cow<'l, str> {
+impl HighlightAndComplete for FileNameArgument {
+    fn highlight<'l>(line: &'l str) -> std::borrow::Cow<'l, str> {
         let path = std::path::Path::new(line.trim());
         if path.is_file() {
             // FIXME better colors
@@ -31,22 +43,13 @@ impl FileNameArgument {
             line.into()
         }
     }
-}
-
-impl Completer for FileNameArgument {
-    type Candidate = Pair;
 
     fn complete(
-        &self,
         line: &str,
         pos: usize,
-        ctx: &rustyline::Context<'_>,
-    ) -> rustyline::Result<(usize, Vec<Self::Candidate>)> {
-        self.0.complete(line, pos, ctx)
-    }
-
-    fn update(&self, line: &mut rustyline::line_buffer::LineBuffer, start: usize, elected: &str) {
-        self.0.update(line, start, elected)
+        _ctx: &__rustyline::Context<'_>,
+    ) -> __rustyline::Result<(usize, Vec<Pair>)> {
+        FilenameCompleter::new().complete_path(line, pos)
     }
 }
 
@@ -78,7 +81,8 @@ macro_rules! define_repl_cmds {
                         } else {
                             pos - cmd_len
                         };
-                        let highlighted_argument = <$argument_helper>::default().highlight(rest, pos);
+                        let highlighted_argument =
+                            <$argument_helper as $crate::HighlightAndComplete>::highlight(rest);
                         return format!("\x1b[93m{}\x1b[0m{}", chosen_cmd, highlighted_argument).into();
                     }
                 )*
@@ -127,7 +131,8 @@ macro_rules! define_repl_cmds {
                 $(
                     if [$(stringify!($field)),+][..].iter().copied().any(|cmd| cmd == chosen_cmd) {
                         let pos = pos - cmd_len;
-                        let (at, completions) = <$argument_helper>::default().complete(rest, pos, ctx)?;
+                        let (at, completions) =
+                            <$argument_helper as $crate::HighlightAndComplete>::complete(rest, pos, ctx)?;
                         return Ok((at + cmd_len, completions));
                     }
                 )*
