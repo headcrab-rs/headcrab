@@ -10,42 +10,43 @@ fn main() {
 
 #[cfg(target_os = "linux")]
 mod example {
-    use rustyline::CompletionType;
-
-    use repl_tools::{define_repl_cmds, FileNameArgument, NullArgument};
-
-    define_repl_cmds!(enum ReplCommand {
-        /// Start a program to debug
-        exec: FileNameArgument,
-        /// Attach to an existing program
-        attach: NullArgument,
-        /// Detach from the debugged program. Leaving it running when headcrab exits
-        detach: NullArgument,
-        /// Kill the program being debugged
-        kill: NullArgument,
-        /// Step one instruction
-        stepi: NullArgument,
-        /// Continue the program being debugged
-        continue|cont: NullArgument,
-        // FIXME move the `read:` part before the `--` in the help
-        /// read: List registers and their content for the current stack frame
-        registers|regs: NullArgument,
-        /// Print backtrace of stack frames
-        backtrace|bt: NullArgument,
-        /// Print all local variables of current stack frame
-        locals: NullArgument,
-        /// Print this help
-        help|h: NullArgument,
-        /// Exit
-        exit|quit|q: NullArgument,
-    });
-
-    type ReplHelper = repl_tools::MakeHelper<ReplCommand>;
+    use std::path::{Path, PathBuf};
 
     use headcrab::{
         symbol::{DisassemblySource, RelocatedDwarf},
         target::{AttachOptions, LinuxTarget, UnixTarget},
     };
+
+    use repl_tools::HighlightAndComplete;
+    use rustyline::CompletionType;
+
+    repl_tools::define_repl_cmds!(enum ReplCommand {
+        /// Start a program to debug
+        Exec: PathBuf,
+        /// Attach to an existing program
+        Attach: String,
+        /// Detach from the debugged program. Leaving it running when headcrab exits
+        Detach: String,
+        /// Kill the program being debugged
+        Kill: String,
+        /// Step one instruction
+        Stepi|si: String,
+        /// Continue the program being debugged
+        Continue|cont: String,
+        // FIXME move the `read:` part before the `--` in the help
+        /// read: List registers and their content for the current stack frame
+        Registers|regs: String,
+        /// Print backtrace of stack frames
+        Backtrace|bt: String,
+        /// Disassemble some a several instructions starting at the instruction pointer
+        Disassemble|dis: String,
+        /// Print all local variables of current stack frame
+        Locals: String,
+        /// Print this help
+        Help|h: String,
+    });
+
+    type ReplHelper = repl_tools::MakeHelper<ReplCommand>;
 
     struct Context {
         remote: Option<LinuxTarget>,
@@ -137,7 +138,7 @@ mod example {
 
         if let Some(exec_cmd) = exec_cmd {
             println!("Starting program: {}", exec_cmd);
-            context.set_remote(match LinuxTarget::launch(&exec_cmd) {
+            context.set_remote(match LinuxTarget::launch(Path::new(&exec_cmd)) {
                 Ok((target, status)) => {
                     println!("{:?}", status);
                     target
@@ -187,49 +188,84 @@ mod example {
     }
 
     fn run_command(context: &mut Context, command: &str) -> Result<(), Box<dyn std::error::Error>> {
-        let mut parts = command.trim().split(' ').map(str::trim);
-        match parts.next() {
-            Some("h") | Some("help") => {
+        if command == "" {
+            return Ok(());
+        } else if command == "_patch_breakpoint_function" {
+            // Patch the `pause` instruction inside a function called `breakpoint` to be a
+            // breakpoint. This is useful while we don't have support for setting breakpoints at
+            // runtime yet.
+            // FIXME remove once real breakpoint support is added
+
+            context.load_debuginfo_if_necessary()?;
+            // Test that `a_function` resolves to a function.
+            let breakpoint_addr = context.debuginfo().get_symbol_address("breakpoint").unwrap() + 4 /* prologue */;
+            // Write breakpoint to the `breakpoint` function.
+            let mut pause_inst = 0 as libc::c_ulong;
+            unsafe {
+                context
+                    .remote()?
+                    .read()
+                    .read(&mut pause_inst, breakpoint_addr)
+                    .apply()
+                    .unwrap();
+            }
+            // pause (rep nop); ...
+            assert_eq!(
+                &pause_inst.to_ne_bytes()[0..2],
+                &[0xf3, 0x90],
+                "Pause instruction not found"
+            );
+            let mut breakpoint_inst = pause_inst.to_ne_bytes();
+            // int3; nop; ...
+            breakpoint_inst[0] = 0xcc;
+            nix::sys::ptrace::write(
+                context.remote()?.pid(),
+                breakpoint_addr as *mut _,
+                libc::c_ulong::from_ne_bytes(breakpoint_inst) as *mut _,
+            )
+            .unwrap();
+        }
+
+        let command = ReplCommand::from_str(command)?;
+        match command {
+            ReplCommand::Help(_) => {
                 ReplCommand::print_help(std::io::stdout()).unwrap();
+                println!("\x1b[1mexit | quit | q\x1b[0m -- Exit");
             }
-            Some("exec") => {
-                if let Some(cmd) = parts.next() {
-                    println!("Starting program: {}", cmd);
-                    let (remote, status) = LinuxTarget::launch(cmd)?;
-                    println!("{:?}", status);
-                    context.set_remote(remote);
-                }
+            ReplCommand::Exec(cmd) => {
+                println!("Starting program: {}", cmd.display());
+                let (remote, status) = LinuxTarget::launch(&cmd)?;
+                println!("{:?}", status);
+                context.set_remote(remote);
             }
-            Some("attach") => {
-                if let Some(pid) = parts.next() {
-                    let pid = nix::unistd::Pid::from_raw(pid.parse()?);
-                    println!("Attaching to process {}", pid);
-                    let (remote, status) = LinuxTarget::attach(
-                        pid,
-                        AttachOptions {
-                            kill_on_exit: false,
-                        },
-                    )?;
-                    println!("{:?}", status);
-                    // FIXME detach or kill old remote
-                    context.set_remote(remote);
-                }
+            ReplCommand::Attach(pid) => {
+                let pid = nix::unistd::Pid::from_raw(pid.parse()?);
+                println!("Attaching to process {}", pid);
+                let (remote, status) = LinuxTarget::attach(
+                    pid,
+                    AttachOptions {
+                        kill_on_exit: false,
+                    },
+                )?;
+                println!("{:?}", status);
+                // FIXME detach or kill old remote
+                context.set_remote(remote);
             }
-            Some("detach") => {
+            ReplCommand::Detach(_) => {
                 context.remote()?.detach()?;
                 context.remote = None;
             }
-            Some("kill") => println!("{:?}", context.remote()?.kill()?),
-            Some("si") | Some("stepi") => println!("{:?}", context.remote()?.step()?),
-            Some("cont") | Some("continue") => println!("{:?}", context.remote()?.unpause()?),
-            Some("regs") | Some("registers") => match parts.next() {
-                Some("read") => println!("{:?}", context.remote()?.read_regs()?),
-                Some(sub) => Err(format!("Unknown `regs` subcommand `{}`", sub))?,
-                None => Err(format!(
+            ReplCommand::Kill(_) => println!("{:?}", context.remote()?.kill()?),
+            ReplCommand::Stepi(_) => println!("{:?}", context.remote()?.step()?),
+            ReplCommand::Continue(_) => println!("{:?}", context.remote()?.unpause()?),
+            ReplCommand::Registers(sub_cmd) => match &*sub_cmd {
+                "" => Err(format!(
                     "Expected subcommand found nothing. Try `regs read`"
                 ))?,
+                "read" => println!("{:?}", context.remote()?.read_regs()?),
+                _ => Err(format!("Unknown `regs` subcommand `{}`", sub_cmd))?,
             },
-            Some("bt") | Some("backtrace") => {
+            ReplCommand::Backtrace(sub_cmd) => {
                 context.load_debuginfo_if_necessary()?;
 
                 let regs = context.remote()?.read_regs()?;
@@ -244,8 +280,8 @@ mod example {
                         .apply()?;
                 }
 
-                let call_stack: Vec<_> = match parts.next() {
-                    Some("fp") | None => headcrab::symbol::unwind::frame_pointer_unwinder(
+                let call_stack: Vec<_> = match &*sub_cmd {
+                    "" | "fp" => headcrab::symbol::unwind::frame_pointer_unwinder(
                         context.debuginfo(),
                         &stack[..],
                         regs.rip as usize,
@@ -253,13 +289,13 @@ mod example {
                         regs.rbp as usize,
                     )
                     .collect(),
-                    Some("naive") => headcrab::symbol::unwind::naive_unwinder(
+                    "naive" => headcrab::symbol::unwind::naive_unwinder(
                         context.debuginfo(),
                         &stack[..],
                         regs.rip as usize,
                     )
                     .collect(),
-                    Some(sub) => Err(format!("Unknown `bt` subcommand `{}`", sub))?,
+                    _ => Err(format!("Unknown `bt` subcommand `{}`", sub_cmd))?,
                 };
                 for func in call_stack {
                     let res = context
@@ -313,7 +349,7 @@ mod example {
                     }
                 }
             }
-            Some("dis") | Some("disassemble") => {
+            ReplCommand::Disassemble(_) => {
                 let ip = context.remote()?.read_regs()?.rip;
                 let mut code = [0; 64];
                 unsafe {
@@ -326,7 +362,7 @@ mod example {
                 let disassembly = context.disassembler.source_snippet(&code, ip, true)?;
                 println!("{}", disassembly);
             }
-            Some("locals") => {
+            ReplCommand::Locals(_) => {
                 let regs = context.remote()?.read_regs()?;
                 let func = regs.rip as usize;
                 let res = context.debuginfo().with_addr_frames(
@@ -412,43 +448,6 @@ mod example {
                     Some(false) => {}
                 }
             }
-
-            // Patch the `pause` instruction inside a function called `breakpoint` to be a
-            // breakpoint. This is useful while we don't have support for setting breakpoints at
-            // runtime yet.
-            // FIXME remove once real breakpoint support is added
-            Some("_patch_breakpoint_function") => {
-                context.load_debuginfo_if_necessary()?;
-                // Test that `a_function` resolves to a function.
-                let breakpoint_addr = context.debuginfo().get_symbol_address("breakpoint").unwrap() + 4 /* prologue */;
-                // Write breakpoint to the `breakpoint` function.
-                let mut pause_inst = 0 as libc::c_ulong;
-                unsafe {
-                    context
-                        .remote()?
-                        .read()
-                        .read(&mut pause_inst, breakpoint_addr)
-                        .apply()
-                        .unwrap();
-                }
-                // pause (rep nop); ...
-                assert_eq!(
-                    &pause_inst.to_ne_bytes()[0..2],
-                    &[0xf3, 0x90],
-                    "Pause instruction not found"
-                );
-                let mut breakpoint_inst = pause_inst.to_ne_bytes();
-                // int3; nop; ...
-                breakpoint_inst[0] = 0xcc;
-                nix::sys::ptrace::write(
-                    context.remote()?.pid(),
-                    breakpoint_addr as *mut _,
-                    libc::c_ulong::from_ne_bytes(breakpoint_inst) as *mut _,
-                )
-                .unwrap();
-            }
-            Some("") | None => {}
-            Some(command) => Err(format!("Unknown command `{}`", command))?,
         }
 
         Ok(())

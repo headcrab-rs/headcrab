@@ -1,4 +1,8 @@
-use std::{borrow::Cow, marker::PhantomData};
+use std::{
+    borrow::Cow,
+    marker::PhantomData,
+    path::{Path, PathBuf},
+};
 
 use rustyline::{
     completion::{Completer, FilenameCompleter, Pair},
@@ -11,7 +15,8 @@ use rustyline::{
 #[doc(hidden)]
 pub use rustyline as __rustyline;
 
-pub trait HighlightAndComplete {
+pub trait HighlightAndComplete: Sized {
+    fn from_str(line: &str) -> Result<Self, Box<dyn std::error::Error>>;
     fn highlight<'l>(line: &'l str) -> Cow<'l, str>;
     fn complete(
         line: &str,
@@ -65,9 +70,11 @@ impl<T: HighlightAndComplete> Completer for MakeHelper<T> {
     }
 }
 
-pub struct NullArgument(());
+impl HighlightAndComplete for String {
+    fn from_str(line: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        Ok(line.trim().to_owned())
+    }
 
-impl HighlightAndComplete for NullArgument {
     fn highlight<'l>(line: &'l str) -> Cow<'l, str> {
         line.into()
     }
@@ -82,9 +89,13 @@ impl HighlightAndComplete for NullArgument {
     }
 }
 
-pub struct FileNameArgument;
+pub struct FileNameArgument(PathBuf);
 
-impl HighlightAndComplete for FileNameArgument {
+impl HighlightAndComplete for PathBuf {
+    fn from_str(line: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        Ok(Path::new(line.trim()).to_owned())
+    }
+
     fn highlight<'l>(line: &'l str) -> Cow<'l, str> {
         let path = std::path::Path::new(line.trim());
         if path.is_file() {
@@ -111,28 +122,45 @@ macro_rules! define_repl_cmds {
     (enum $command:ident {
         $(
             #[doc = $doc:literal]
-            $($field:ident)|+: $argument_helper:ty,
+            $cmd:ident$(|$alias:ident)*: $argument:ty,
         )*
     }) => {
-        enum $command {}
+        enum $command {
+            $(
+                $cmd($argument),
+            )*
+        }
 
         impl $command {
             fn print_help(mut w: impl std::io::Write) -> std::io::Result<()> {
                 $(
-                    writeln!(w, "\x1b[1m{}\x1b[0m -- {}", concat!(stringify!($($field)|+)), $doc.trim())?;
+                    writeln!(w, "\x1b[1m{}\x1b[0m -- {}", concat!(stringify!($cmd $(|$alias)*)).to_lowercase(), $doc.trim())?;
                 )*
                 Ok(())
             }
         }
 
         impl $crate::HighlightAndComplete for $command {
+            fn from_str(line: &str) -> Result<Self, Box<dyn std::error::Error>> {
+                let cmd_len = line.find(' ').unwrap_or(line.len());
+                let (chosen_cmd, rest) = line.split_at(cmd_len);
+
+                $(
+                    if [stringify!($cmd) $(,stringify!($alias))*][..].iter().any(|cmd| cmd.eq_ignore_ascii_case(chosen_cmd)) {
+                        return Ok(Self::$cmd(<$argument as $crate::HighlightAndComplete>::from_str(rest)?));
+                    }
+                )*
+
+                Err(format!("Unknown command `{}`", chosen_cmd).into())
+            }
+
             fn highlight<'l>(line: &'l str) -> std::borrow::Cow<'l, str> {
                 let cmd_len = line.find(' ').unwrap_or(line.len());
                 let (chosen_cmd, rest) = line.split_at(cmd_len);
                 $(
-                    if [$(stringify!($field)),+][..].iter().copied().any(|cmd| cmd == chosen_cmd) {
+                    if [stringify!($cmd) $(,stringify!($alias))*][..].iter().any(|cmd| cmd.eq_ignore_ascii_case(chosen_cmd)) {
                         let highlighted_argument =
-                            <$argument_helper as $crate::HighlightAndComplete>::highlight(rest);
+                            <$argument as $crate::HighlightAndComplete>::highlight(rest);
                         return format!("\x1b[93m{}\x1b[0m{}", chosen_cmd, highlighted_argument).into();
                     }
                 )*
@@ -146,9 +174,8 @@ macro_rules! define_repl_cmds {
             ) -> $crate::__rustyline::Result<(usize, Vec<$crate::__rustyline::completion::Pair>)> {
                 let cmd_len = line.find(' ').unwrap_or(line.len());
                 if pos <= cmd_len {
-                    let candidates = [$($(stringify!($field)),+),*][..]
+                    let candidates = [$(stringify!($cmd).to_lowercase() $(,stringify!($alias).to_lowercase())*),*][..]
                         .iter()
-                        .copied()
                         .filter(|cmd| cmd.starts_with(line))
                         .map(|cmd| $crate::__rustyline::completion::Pair {
                             display: cmd.to_owned(),
@@ -162,10 +189,10 @@ macro_rules! define_repl_cmds {
 
                 let (chosen_cmd, rest) = line.split_at(cmd_len);
                 $(
-                    if [$(stringify!($field)),+][..].iter().copied().any(|cmd| cmd == chosen_cmd) {
+                    if [stringify!($cmd) $(,stringify!($alias))*][..].iter().copied().any(|cmd| cmd.eq_ignore_ascii_case(chosen_cmd)) {
                         let pos = pos - cmd_len;
                         let (at, completions) =
-                            <$argument_helper as $crate::HighlightAndComplete>::complete(rest, pos, ctx)?;
+                            <$argument as $crate::HighlightAndComplete>::complete(rest, pos, ctx)?;
                         return Ok((at + cmd_len, completions));
                     }
                 )*
