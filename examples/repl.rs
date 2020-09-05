@@ -10,6 +10,8 @@ fn main() {
 
 #[cfg(target_os = "linux")]
 mod example {
+    use std::fs::File;
+    use std::io::{prelude::*, BufReader};
     use std::{
         os::unix::ffi::OsStrExt,
         path::{Path, PathBuf},
@@ -25,6 +27,8 @@ mod example {
 
     use repl_tools::HighlightAndComplete;
     use rustyline::CompletionType;
+
+    pub type CrabResult<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
     repl_tools::define_repl_cmds!(enum ReplCommand {
         err = ReplCommandError;
@@ -56,6 +60,8 @@ mod example {
         InjectClif: PathBuf,
         /// Inject a dynamic library and run it's `__headcrab_command` function
         InjectLib: PathBuf,
+        /// Print the source code execution point.
+        List|l: (),
         /// Exit
         Exit|quit|q: (),
     });
@@ -66,6 +72,25 @@ mod example {
         remote: Option<LinuxTarget>,
         debuginfo: Option<RelocatedDwarf>,
         disassembler: DisassemblySource,
+    }
+
+    /// The subcommands that are acceptable for backtrace.
+    enum BacktraceType {
+        // uses the frame_pointer_unwinder.
+        FramePtr,
+
+        // uses naive_unwinder.
+        Naive,
+    }
+
+    impl BacktraceType {
+        fn from_str(value: &str) -> CrabResult<Self> {
+            match value {
+                "fp" | "" => Ok(BacktraceType::FramePtr),
+                "naive" => Ok(BacktraceType::Naive),
+                &_ => Err(format!("Unrecognized backtrace type {}. Supported ones are 'fp' and 'naive'. Please consider using one of them.", value).into()),
+            }
+        }
     }
 
     impl Context {
@@ -265,8 +290,16 @@ mod example {
                 context.remote = None;
             }
             ReplCommand::Kill(()) => println!("{:?}", context.remote()?.kill()?),
-            ReplCommand::Stepi(()) => println!("{:?}", context.remote()?.step()?),
-            ReplCommand::Continue(()) => println!("{:?}", context.remote()?.unpause()?),
+            ReplCommand::Stepi(()) => {
+                println!("{:?}", context.remote()?.step()?);
+                return print_source_for_top_of_stack_symbol(context, 3);
+            }
+            ReplCommand::Continue(()) => {
+                println!("{:?}", context.remote()?.unpause()?);
+                // When we hit the next breakpoint, we also want to display the source code
+                // as does lldb and gdb.
+                return print_source_for_top_of_stack_symbol(context, 3);
+            }
             ReplCommand::Registers(sub_cmd) => match &*sub_cmd {
                 "" => Err(format!(
                     "Expected subcommand found nothing. Try `regs read`"
@@ -290,6 +323,9 @@ mod example {
                 let disassembly = context.disassembler.source_snippet(&code, ip, true)?;
                 println!("{}", disassembly);
             }
+            ReplCommand::List(()) => {
+                print_source_for_top_of_stack_symbol(context, 3)?;
+            }
             ReplCommand::Locals(()) => {
                 return show_locals(context);
             }
@@ -301,7 +337,6 @@ mod example {
             }
             ReplCommand::Exit(()) => unreachable!("Should be handled earlier"),
         }
-
         Ok(())
     }
 
@@ -346,37 +381,9 @@ mod example {
         context: &mut Context,
         sub_cmd: &str,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        context.load_debuginfo_if_necessary()?;
+        let bt_type = BacktraceType::from_str(sub_cmd)?;
 
-        let regs = context.remote()?.read_regs()?;
-
-        // Read stack
-        let mut stack: [usize; 1024] = [0; 1024];
-        unsafe {
-            context
-                .remote()?
-                .read()
-                .read(&mut stack, regs.rsp as usize)
-                .apply()?;
-        }
-
-        let call_stack: Vec<_> = match sub_cmd {
-            "" | "fp" => headcrab::symbol::unwind::frame_pointer_unwinder(
-                context.debuginfo(),
-                &stack[..],
-                regs.rip as usize,
-                regs.rsp as usize,
-                regs.rbp as usize,
-            )
-            .collect(),
-            "naive" => headcrab::symbol::unwind::naive_unwinder(
-                context.debuginfo(),
-                &stack[..],
-                regs.rip as usize,
-            )
-            .collect(),
-            _ => Err(format!("Unknown `bt` subcommand `{}`", sub_cmd))?,
-        };
+        let call_stack: Vec<_> = get_call_stack(context, bt_type)?;
         for func in call_stack {
             let res = context
                 .debuginfo()
@@ -518,6 +525,143 @@ mod example {
         Ok(())
     }
 
+    fn get_call_stack(
+        context: &mut Context,
+        bt_type: BacktraceType,
+    ) -> Result<Vec<usize>, Box<dyn std::error::Error>> {
+        context.load_debuginfo_if_necessary()?;
+
+        let regs = context.remote()?.read_regs()?;
+
+        let mut stack: [usize; 1024] = [0; 1024];
+        unsafe {
+            context
+                .remote()?
+                .read()
+                .read(&mut stack, regs.rsp as usize)
+                .apply()?;
+        }
+
+        let call_stack: Vec<_> = match bt_type {
+            BacktraceType::FramePtr => headcrab::symbol::unwind::frame_pointer_unwinder(
+                context.debuginfo(),
+                &stack[..],
+                regs.rip as usize,
+                regs.rsp as usize,
+                regs.rbp as usize,
+            )
+            .collect(),
+            BacktraceType::Naive => headcrab::symbol::unwind::naive_unwinder(
+                context.debuginfo(),
+                &stack[..],
+                regs.rip as usize,
+            )
+            .collect(),
+        };
+        Ok(call_stack)
+    }
+
+    /// Get the call_stack from the context and then tries to display the
+    /// source for the top call in the stack. Becasue the first frame is usually
+    /// sse2.rs, we just display the file and line but not the source and we skip
+    /// over to the next frame. For the next frame, we will display the source code.
+    /// An example view is shown below:
+    ///
+    /// It marks the line with the berakpoint with a '>' character and shows some lines
+    /// of context above and below it.
+    ///
+    /// 0000555555559295 core::core_arch::x86::sse2::_mm_pause /../rustup/toolchains/1.45.2-x86_64-unknown-linux-gnu/../stdarch/crates/core_arch/src/x86/sse2.rs:25
+    /// /workspaces/headcrab/tests/testees/hello.rs:7:14
+    ///    4 #[inline(never)]
+    ///    5 fn breakpoint() {
+    ///    6     // This will be patched by the debugger to be a breakpoint
+    /// >  7     unsafe { core::arch::x86_64::_mm_pause(); }
+    ///    8 }
+    ///    9
+    ///   10 #[inline(never)]
+    fn print_source_for_top_of_stack_symbol(
+        context: &mut Context,
+        context_lines: u32,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let call_stack = get_call_stack(context, BacktraceType::FramePtr)?;
+        let top_of_stack = call_stack[0];
+        context
+            .debuginfo()
+            .with_addr_frames(top_of_stack, |_addr, mut frames| {
+                let mut first_frame = true;
+                while let Some(frame) = frames.next()? {
+                    let name = frame
+                        .function
+                        .as_ref()
+                        .map(|f| Ok(f.demangle()?.into_owned()))
+                        .transpose()
+                        .map_err(|err: gimli::Error| err)?
+                        .unwrap_or_else(|| "<unknown>".to_string());
+
+                    let (file, line, column) = frame
+                        .location
+                        .as_ref()
+                        .map(|loc| {
+                            (
+                                loc.file.unwrap_or("<unknown file>"),
+                                loc.line.unwrap_or(0),
+                                loc.column.unwrap_or(0),
+                            )
+                        })
+                        .unwrap_or_default();
+
+                    if first_frame {
+                        println!(
+                            "{:016x} {} {}",
+                            top_of_stack,
+                            name,
+                            format!("{}:{}", file, line)
+                        );
+                    } else {
+                        print_file_lines_with_context(file, line, column, context_lines)?;
+                    }
+
+                    first_frame = false;
+                }
+                Ok(first_frame)
+            })?;
+        Ok(())
+    }
+
+    fn print_file_lines_with_context(
+        filename: &str,
+        line_no: u32,
+        column: u32,
+        context_lines: u32,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let file = File::open(&filename)?;
+        let reader = BufReader::new(file);
+
+        let mut i = 0;
+        let start = std::cmp::max(0, line_no - context_lines);
+        let end = line_no + context_lines;
+
+        println!("{}:{}:{}", filename, line_no, column);
+        for line in reader.lines() {
+            i += 1;
+            if i < start {
+                continue;
+            } else if i >= start && i < line_no {
+                println!("{:5} {}", i, line?);
+            } else if i == line_no {
+                println!(">{:4} {}", i, line?);
+            } else if i > line_no && i <= end {
+                println!("{:5} {}", i, line?);
+            } else {
+                // If we have printed the asked for line and the context around it,
+                // There is no point in iterating through the whole file. So, break
+                // out of the loop and make an early return.
+                break;
+            }
+        }
+        Ok(())
+    }
+
     fn get_linux_x86_64_reg(
         regs: libc::user_regs_struct,
     ) -> impl Fn(gimli::Register, gimli::ValueType) -> gimli::Value {
@@ -614,7 +758,6 @@ mod example {
             local.name()?.unwrap_or("<no name>"),
             value
         );
-
         Ok(())
     }
 
