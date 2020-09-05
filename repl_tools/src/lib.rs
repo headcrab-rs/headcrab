@@ -86,6 +86,29 @@ impl<T: HighlightAndComplete> Completer for MakeHelper<T> {
     }
 }
 
+impl HighlightAndComplete for () {
+    fn from_str(line: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        if line.trim() == "" {
+            Ok(())
+        } else {
+            Err(format!("No arguments were expected, found `{}`", line.trim()).into())
+        }
+    }
+
+    fn highlight<'l>(line: &'l str) -> Cow<'l, str> {
+        format!("\x1b[91m{}\x1b[0m", line).into()
+    }
+
+    fn complete(
+        line: &str,
+        pos: usize,
+        ctx: &rustyline::Context<'_>,
+    ) -> rustyline::Result<(usize, Vec<Pair>)> {
+        let _ = (line, pos, ctx);
+        Ok((0, vec![]))
+    }
+}
+
 impl HighlightAndComplete for String {
     fn from_str(line: &str) -> Result<Self, Box<dyn std::error::Error>> {
         Ok(line.trim().to_owned())

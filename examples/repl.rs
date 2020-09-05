@@ -30,26 +30,26 @@ mod example {
         /// Attach to an existing program
         Attach: String,
         /// Detach from the debugged program. Leaving it running when headcrab exits
-        Detach: String,
+        Detach: (),
         /// Kill the program being debugged
-        Kill: String,
+        Kill: (),
         /// Step one instruction
-        Stepi|si: String,
+        Stepi|si: (),
         /// Continue the program being debugged
-        Continue|cont: String,
+        Continue|cont: (),
         // FIXME move the `read:` part before the `--` in the help
         /// read: List registers and their content for the current stack frame
         Registers|regs: String,
         /// Print backtrace of stack frames
         Backtrace|bt: String,
         /// Disassemble some a several instructions starting at the instruction pointer
-        Disassemble|dis: String,
+        Disassemble|dis: (),
         /// Print all local variables of current stack frame
-        Locals: String,
+        Locals: (),
         /// Print this help
-        Help|h: String,
+        Help|h: (),
         /// Exit
-        Exit|quit|q: String,
+        Exit|quit|q: (),
     });
 
     type ReplHelper = repl_tools::MakeHelper<ReplCommand>;
@@ -267,7 +267,7 @@ mod example {
 
         let command = ReplCommand::from_str(command)?;
         match command {
-            ReplCommand::Help(_) => {
+            ReplCommand::Help(()) => {
                 ReplCommand::print_help(std::io::stdout(), color.get()).unwrap();
             }
             ReplCommand::Exec(cmd) => {
@@ -289,13 +289,13 @@ mod example {
                 // FIXME detach or kill old remote
                 context.set_remote(remote);
             }
-            ReplCommand::Detach(_) => {
+            ReplCommand::Detach(()) => {
                 context.remote()?.detach()?;
                 context.remote = None;
             }
-            ReplCommand::Kill(_) => println!("{:?}", context.remote()?.kill()?),
-            ReplCommand::Stepi(_) => println!("{:?}", context.remote()?.step()?),
-            ReplCommand::Continue(_) => println!("{:?}", context.remote()?.unpause()?),
+            ReplCommand::Kill(()) => println!("{:?}", context.remote()?.kill()?),
+            ReplCommand::Stepi(()) => println!("{:?}", context.remote()?.step()?),
+            ReplCommand::Continue(()) => println!("{:?}", context.remote()?.unpause()?),
             ReplCommand::Registers(sub_cmd) => match &*sub_cmd {
                 "" => Err(format!(
                     "Expected subcommand found nothing. Try `regs read`"
@@ -387,7 +387,7 @@ mod example {
                     }
                 }
             }
-            ReplCommand::Disassemble(_) => {
+            ReplCommand::Disassemble(()) => {
                 let ip = context.remote()?.read_regs()?.rip;
                 let mut code = [0; 64];
                 unsafe {
@@ -400,7 +400,7 @@ mod example {
                 let disassembly = context.disassembler.source_snippet(&code, ip, true)?;
                 println!("{}", disassembly);
             }
-            ReplCommand::Locals(_) => {
+            ReplCommand::Locals(()) => {
                 let regs = context.remote()?.read_regs()?;
                 let func = regs.rip as usize;
                 let res = context.debuginfo().with_addr_frames(
@@ -486,7 +486,7 @@ mod example {
                     Some(false) => {}
                 }
             }
-            ReplCommand::Exit(_) => unreachable!("Should be handled earlier"),
+            ReplCommand::Exit(()) => unreachable!("Should be handled earlier"),
         }
 
         Ok(())
