@@ -10,7 +10,11 @@ fn main() {
 
 #[cfg(target_os = "linux")]
 mod example {
-    use std::path::{Path, PathBuf};
+    use std::{
+        cell::Cell,
+        path::{Path, PathBuf},
+        rc::Rc,
+    };
 
     use headcrab::{
         symbol::{DisassemblySource, RelocatedDwarf},
@@ -44,6 +48,8 @@ mod example {
         Locals: String,
         /// Print this help
         Help|h: String,
+        /// Exit
+        Exit|quit|q: String,
     });
 
     type ReplHelper = repl_tools::MakeHelper<ReplCommand>;
@@ -83,13 +89,15 @@ mod example {
     }
 
     pub fn main() {
+        let color = Rc::new(Cell::new(true));
+
         let mut rl = rustyline::Editor::<ReplHelper>::with_config(
             rustyline::Config::builder()
                 .auto_add_history(true)
                 .completion_type(CompletionType::List)
                 .build(),
         );
-        rl.set_helper(Some(ReplHelper::default()));
+        rl.set_helper(Some(ReplHelper::new(color.clone())));
 
         let mut context = Context {
             remote: None,
@@ -111,6 +119,10 @@ mod example {
                         "Found flag -ex without argument".to_string()
                     }
                 }
+                "--no-color" => {
+                    color.set(false);
+                    continue;
+                }
                 _ if arg.starts_with("-") => {
                     format!("Found argument '{}' which wasn't expected", arg)
                 }
@@ -130,7 +142,8 @@ mod example {
         {} [OPTIONS] executable-file
 
     OPTIONS:
-        -ex <COMMAND>           Run command on startup",
+        -ex <COMMAND>           Run command on startup
+        --no-color              Disable colors",
                 err, repl_name
             );
             std::process::exit(1);
@@ -144,18 +157,30 @@ mod example {
                     target
                 }
                 Err(err) => {
-                    println!("\x1b[91mError while launching debuggee: {}\x1b[0m", err);
+                    if color.get() {
+                        println!("\x1b[91mError while launching debuggee: {}\x1b[0m", err);
+                    } else {
+                        println!("Error while launching debuggee: {}", err);
+                    }
                     std::process::exit(1);
                 }
             });
         }
 
         for command in cmds.into_iter() {
-            println!("\x1b[96m> {}\x1b[0m", command);
-            match run_command(&mut context, &command) {
+            if color.get() {
+                println!("\x1b[96m> {}\x1b[0m", command);
+            } else {
+                println!("> {}", command);
+            }
+            match run_command(&mut context, &color, &command) {
                 Ok(()) => {}
                 Err(err) => {
-                    println!("\x1b[91mError: {}\x1b[0m", err);
+                    if color.get() {
+                        println!("\x1b[91mError: {}\x1b[0m", err);
+                    } else {
+                        println!("Error: {}", err);
+                    }
                 }
             }
         }
@@ -167,10 +192,14 @@ mod example {
                         println!("Exit");
                         return;
                     }
-                    match run_command(&mut context, &command) {
+                    match run_command(&mut context, &color, &command) {
                         Ok(()) => {}
                         Err(err) => {
-                            println!("\x1b[91mError: {}\x1b[0m", err);
+                            if color.get() {
+                                println!("\x1b[91mError: {}\x1b[0m", err);
+                            } else {
+                                println!("Error: {}", err);
+                            }
                         }
                     }
                 }
@@ -180,14 +209,22 @@ mod example {
                     return;
                 }
                 Err(err) => {
-                    println!("\x1b[91mError: {:?}\x1b[0m", err);
+                    if color.get() {
+                        println!("\x1b[91mError: {:?}\x1b[0m", err);
+                    } else {
+                        println!("Error: {:?}", err);
+                    }
                     std::process::exit(1);
                 }
             }
         }
     }
 
-    fn run_command(context: &mut Context, command: &str) -> Result<(), Box<dyn std::error::Error>> {
+    fn run_command(
+        context: &mut Context,
+        color: &Cell<bool>,
+        command: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         if command == "" {
             return Ok(());
         } else if command == "_patch_breakpoint_function" {
@@ -229,8 +266,7 @@ mod example {
         let command = ReplCommand::from_str(command)?;
         match command {
             ReplCommand::Help(_) => {
-                ReplCommand::print_help(std::io::stdout()).unwrap();
-                println!("\x1b[1mexit | quit | q\x1b[0m -- Exit");
+                ReplCommand::print_help(std::io::stdout(), color.get()).unwrap();
             }
             ReplCommand::Exec(cmd) => {
                 println!("Starting program: {}", cmd.display());
@@ -448,6 +484,7 @@ mod example {
                     Some(false) => {}
                 }
             }
+            ReplCommand::Exit(_) => unreachable!("Should be handled earlier"),
         }
 
         Ok(())

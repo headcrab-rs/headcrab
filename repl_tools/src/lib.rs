@@ -1,7 +1,9 @@
 use std::{
     borrow::Cow,
+    cell::Cell,
     marker::PhantomData,
     path::{Path, PathBuf},
+    rc::Rc,
 };
 
 use rustyline::{
@@ -25,11 +27,17 @@ pub trait HighlightAndComplete: Sized {
     ) -> rustyline::Result<(usize, Vec<Pair>)>;
 }
 
-pub struct MakeHelper<T: HighlightAndComplete>(PhantomData<T>);
+pub struct MakeHelper<T: HighlightAndComplete> {
+    color: Rc<Cell<bool>>,
+    _marker: PhantomData<T>,
+}
 
-impl<T: HighlightAndComplete> Default for MakeHelper<T> {
-    fn default() -> Self {
-        Self(PhantomData)
+impl<T: HighlightAndComplete> MakeHelper<T> {
+    pub fn new(color: Rc<Cell<bool>>) -> Self {
+        Self {
+            color,
+            _marker: PhantomData,
+        }
     }
 }
 
@@ -41,7 +49,11 @@ impl<T: HighlightAndComplete> Hinter for MakeHelper<T> {}
 
 impl<T: HighlightAndComplete> Highlighter for MakeHelper<T> {
     fn highlight<'l>(&self, line: &'l str, _pos: usize) -> Cow<'l, str> {
-        T::highlight(line)
+        if self.color.get() {
+            T::highlight(line)
+        } else {
+            line.into()
+        }
     }
 
     fn highlight_prompt<'b, 's: 'b, 'p: 'b>(
@@ -49,11 +61,15 @@ impl<T: HighlightAndComplete> Highlighter for MakeHelper<T> {
         prompt: &'p str,
         _default: bool,
     ) -> std::borrow::Cow<'b, str> {
-        format!("\x1b[90m{}\x1b[0m", prompt).into()
+        if self.color.get() {
+            format!("\x1b[90m{}\x1b[0m", prompt).into()
+        } else {
+            prompt.into()
+        }
     }
 
     fn highlight_char(&self, _line: &str, _pos: usize) -> bool {
-        true
+        self.color.get()
     }
 }
 
@@ -132,9 +148,14 @@ macro_rules! define_repl_cmds {
         }
 
         impl $command {
-            fn print_help(mut w: impl std::io::Write) -> std::io::Result<()> {
+            fn print_help(mut w: impl std::io::Write, color: bool) -> std::io::Result<()> {
                 $(
-                    writeln!(w, "\x1b[1m{}\x1b[0m -- {}", concat!(stringify!($cmd $(|$alias)*)).to_lowercase(), $doc.trim())?;
+                    if color {
+                        write!(w, "\x1b[1m{}\x1b[0m -- ", concat!(stringify!($cmd $(|$alias)*)).to_lowercase())?;
+                    } else {
+                        write!(w, "{} -- ", concat!(stringify!($cmd $(|$alias)*)).to_lowercase())?;
+                    }
+                    writeln!(w, "{}", $doc.trim())?;
                 )*
                 Ok(())
             }
