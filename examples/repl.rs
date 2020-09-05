@@ -10,6 +10,44 @@ fn main() {
 
 #[cfg(target_os = "linux")]
 mod example {
+    use rustyline::{hint::Hinter, validate::Validator, CompletionType, Helper};
+
+    use repl_tools::{define_repl_cmds, FileNameArgument, NullArgument};
+
+    define_repl_cmds!(ReplHelper {
+        /// Start a program to debug
+        exec: FileNameArgument,
+        /// Attach to an existing program
+        attach: NullArgument,
+        /// Detach from the debugged program. Leaving it running when headcrab exits
+        detach: NullArgument,
+        /// Kill the program being debugged
+        kill: NullArgument,
+        /// Step one instruction
+        stepi: NullArgument,
+        /// Continue the program being debugged
+        continue|cont: NullArgument,
+        // FIXME move the `read:` part before the `--` in the help
+        /// read: List registers and their content for the current stack frame
+        registers|regs: NullArgument,
+        /// Print backtrace of stack frames
+        backtrace|bt: NullArgument,
+        /// Print all local variables of current stack frame
+        locals: NullArgument,
+        /// Print this help
+        help|h: NullArgument,
+        /// Exit
+        exit|quit|q: NullArgument,
+    });
+
+    struct ReplHelper;
+
+    impl Helper for ReplHelper {}
+
+    impl Validator for ReplHelper {}
+
+    impl Hinter for ReplHelper {}
+
     use headcrab::{
         symbol::{DisassemblySource, RelocatedDwarf},
         target::{AttachOptions, LinuxTarget, UnixTarget},
@@ -50,9 +88,14 @@ mod example {
     }
 
     pub fn main() {
-        let mut rl = rustyline::Editor::<()>::with_config(
-            rustyline::Config::builder().auto_add_history(true).build(),
+        let mut rl = rustyline::Editor::<ReplHelper>::with_config(
+            rustyline::Config::builder()
+                .auto_add_history(true)
+                .completion_type(CompletionType::List)
+                .build(),
         );
+        rl.set_helper(Some(ReplHelper));
+
         let mut context = Context {
             remote: None,
             debuginfo: None,
@@ -153,21 +196,7 @@ mod example {
         let mut parts = command.trim().split(' ').map(str::trim);
         match parts.next() {
             Some("h") | Some("help") => {
-                println!("\x1b[1mList of Commands\x1b[0m");
-                println!("\x1b[1mexec\x1b[0m-- Start a program to debug");
-                println!("\x1b[1mattach\x1b[0m -- Attach to an existing program");
-                println!("\x1b[1mdetach\x1b[0m -- Detach from the debugged program. Leaving it running when headcrab exits");
-                println!("\x1b[1mkill\x1b[0m -- Kill the program being debugged");
-                println!("\x1b[1mstepi|si\x1b[0m -- Step one instruction");
-                println!("\x1b[1mcontinue|cont\x1b[0m -- Continue the program being debugged");
-                println!("\x1b[1mregisters|regs\x1b[0m read -- List registers and their content for the current stack frame");
-                println!("\x1b[1mbacktrace|bt\x1b[0m -- Print backtrace of stack frames");
-                println!("\x1b[1mdisassemble|dis\x1b[0m -- Print the disassembled source");
-                println!(
-                    "\x1b[1mlocals\x1b[0m -- Print all local variables of current stack frame"
-                );
-                println!("\x1b[1mhelp|h\x1b[0m -- Print this help");
-                println!("\x1b[1mexit|quit|q\x1b[0m -- Exit");
+                ReplHelper::print_help(std::io::stdout()).unwrap();
             }
             Some("exec") => {
                 if let Some(cmd) = parts.next() {
