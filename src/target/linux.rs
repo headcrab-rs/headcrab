@@ -12,7 +12,8 @@ use procfs::ProcError;
 use std::{
     ffi::CString,
     fs::File,
-    io::{BufRead, BufReader}, path::Path,
+    io::{BufRead, BufReader},
+    path::Path,
 };
 
 pub use hardware_breakpoint::{
