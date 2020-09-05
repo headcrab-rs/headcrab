@@ -324,7 +324,7 @@ mod example {
                 println!("{}", disassembly);
             }
             ReplCommand::List(()) => {
-                print_source_for_top_of_stack_symbol(context, 3)?;
+                return print_source_for_top_of_stack_symbol(context, 3);
             }
             ReplCommand::Locals(()) => {
                 return show_locals(context);
@@ -570,6 +570,7 @@ mod example {
     /// It marks the line with the berakpoint with a '>' character and shows some lines
     /// of context above and below it.
     ///
+    /// ```plain
     /// 0000555555559295 core::core_arch::x86::sse2::_mm_pause /../rustup/toolchains/1.45.2-x86_64-unknown-linux-gnu/../stdarch/crates/core_arch/src/x86/sse2.rs:25
     /// /workspaces/headcrab/tests/testees/hello.rs:7:14
     ///    4 #[inline(never)]
@@ -579,16 +580,16 @@ mod example {
     ///    8 }
     ///    9
     ///   10 #[inline(never)]
+    /// ```
     fn print_source_for_top_of_stack_symbol(
         context: &mut Context,
-        context_lines: u32,
+        context_lines: usize,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let call_stack = get_call_stack(context, BacktraceType::FramePtr)?;
         let top_of_stack = call_stack[0];
         context
             .debuginfo()
             .with_addr_frames(top_of_stack, |_addr, mut frames| {
-                let mut first_frame = true;
                 while let Some(frame) = frames.next()? {
                     let name = frame
                         .function
@@ -598,59 +599,59 @@ mod example {
                         .map_err(|err: gimli::Error| err)?
                         .unwrap_or_else(|| "<unknown>".to_string());
 
-                    let (file, line, column) = frame
-                        .location
-                        .as_ref()
-                        .map(|loc| {
-                            (
-                                loc.file.unwrap_or("<unknown file>"),
-                                loc.line.unwrap_or(0),
-                                loc.column.unwrap_or(0),
-                            )
-                        })
-                        .unwrap_or_default();
+                    // TODO: currently we are skipping over mm_pause but once we have real
+                    // breakpoint support and _patch_breakpoint_function gets removed, this
+                    // must also be removed.
+                    if !name.contains("_mm_pause") {
+                        let (file, line, column) = frame
+                            .location
+                            .as_ref()
+                            .map(|loc| {
+                                (
+                                    loc.file.unwrap_or("<unknown file>"),
+                                    loc.line.unwrap_or(0),
+                                    loc.column.unwrap_or(0),
+                                )
+                            })
+                            .unwrap_or_default();
 
-                    if first_frame {
-                        println!(
-                            "{:016x} {} {}",
-                            top_of_stack,
-                            name,
-                            format!("{}:{}", file, line)
-                        );
-                    } else {
-                        print_file_lines_with_context(file, line, column, context_lines)?;
+                        print_file_lines_with_context(
+                            file,
+                            line as usize,
+                            column,
+                            context_lines as usize,
+                        )?;
                     }
-
-                    first_frame = false;
                 }
-                Ok(first_frame)
+                Ok(())
             })?;
         Ok(())
     }
 
     fn print_file_lines_with_context(
         filename: &str,
-        line_no: u32,
+        line_no: usize,
         column: u32,
-        context_lines: u32,
+        context_lines: usize,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let file = File::open(&filename)?;
         let reader = BufReader::new(file);
 
-        let mut i = 0;
-        let start = std::cmp::max(0, line_no - context_lines);
-        let end = line_no + context_lines;
+        // The line number from the debuginfo is starts at 1 but the one for iterator starts at 0.
+        let key = line_no - 1;
+        let start = if key > context_lines {
+            key - context_lines
+        } else {
+            0
+        };
+        let end = key + context_lines;
 
         println!("{}:{}:{}", filename, line_no, column);
-        for line in reader.lines() {
-            i += 1;
-            if i < start {
-                continue;
-            } else if i >= start && i < line_no {
-                println!("{:5} {}", i, line?);
-            } else if i == line_no {
+
+        for (i, line) in reader.lines().enumerate().skip(start) {
+            if i == key {
                 println!(">{:4} {}", i, line?);
-            } else if i > line_no && i <= end {
+            } else if i <= end {
                 println!("{:5} {}", i, line?);
             } else {
                 // If we have printed the asked for line and the context around it,
