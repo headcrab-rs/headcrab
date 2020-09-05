@@ -261,6 +261,8 @@ mod example {
                 libc::c_ulong::from_ne_bytes(breakpoint_inst) as *mut _,
             )
             .unwrap();
+
+            return Ok(());
         }
 
         let command = ReplCommand::from_str(command)?;
