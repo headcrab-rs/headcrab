@@ -85,11 +85,11 @@ impl<'a> InjectionContext<'a> {
 
     pub fn define_function(&mut self, func_id: FuncId, addr: u64) {
         assert!(self.functions.insert(func_id, addr).is_none());
-}
+    }
 
     pub fn lookup_function(&self, func_id: FuncId) -> u64 {
         self.functions[&func_id]
-}
+    }
 
     pub fn define_data_object(&mut self, data_id: DataId, addr: u64) {
         assert!(self.data_objects.insert(data_id, addr).is_none());
@@ -160,28 +160,15 @@ pub fn compile_clif_code(
     Ok(code_region)
 }
 
-pub fn inject_clif_code(remote: &LinuxTarget, puts_addr: u64) -> Result<(), Box<dyn Error>> {
+pub fn inject_clif_code(
+    remote: &LinuxTarget,
+    lookup_symbol: &dyn Fn(&str) -> u64,
+) -> Result<(), Box<dyn Error>> {
     let mut inj_ctx = InjectionContext::new(remote);
 
-    inj_ctx.define_function(FuncId::from_u32(0), puts_addr);
-
-    let hello_world_region =
-        inj_ctx.allocate_readonly("Hello World from injected code!\n\0".len() as u64)?;
-    inj_ctx
-        .target
-        .write()
-        .write_slice(
-            "Hello World from injected code!\n\0".as_bytes(),
-            hello_world_region as usize,
-        )
-        .apply()?;
-    inj_ctx.define_data_object(DataId::from_u32(0), hello_world_region);
-
-    let code_region = compile_clif_code(
-        &mut inj_ctx,
-        r#"
-    target x86_64-unknown-linux-gnu haswell
-
+    let code = r#"
+    ; data0: "Hello World from injected code!\n\0"
+    ; func0: puts
     function u0:1() system_v {
         gv0 = symbol colocated u1:0
         sig0 = (i64) system_v
@@ -191,9 +178,46 @@ pub fn inject_clif_code(remote: &LinuxTarget, puts_addr: u64) -> Result<(), Box<
         v0 = global_value.i64 gv0
         call fn0(v0)
         return
+    }"#;
+
+    for line in code.lines() {
+        let line = line.trim();
+        if !line.starts_with(';') {
+            continue;
+        }
+        let line = line.trim_start_matches(';').trim_start();
+        let (directive, content) = line.split_at(line.find(':').unwrap_or(line.len()));
+        let content = content[1..].trim_start();
+
+        let (kind, index) = directive.split_at(4);
+        let index: u32 = index.parse().unwrap();
+
+        match kind {
+            "data" => {
+                if content.starts_with('"') {
+                    let content = content
+                        .trim_matches('"')
+                        .replace("\\n", "\n")
+                        .replace("\\0", "\0");
+                    let data_region = inj_ctx.allocate_readonly(content.len() as u64)?;
+                    inj_ctx
+                        .target
+                        .write()
+                        .write_slice(content.as_bytes(), data_region as usize)
+                        .apply()?;
+                    inj_ctx.define_data_object(DataId::from_u32(index), data_region);
+                } else {
+                    todo!();
+                }
+            }
+            "func" => {
+                inj_ctx.define_function(FuncId::from_u32(index), lookup_symbol(content));
+            }
+            _ => panic!("Unknown directive `{}`", directive),
+        }
     }
-    "#,
-    )?;
+
+    let code_region = compile_clif_code(&mut inj_ctx, code)?;
 
     let stack_region = inj_ctx.allocate_readwrite(0x1000)?;
 

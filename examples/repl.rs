@@ -289,10 +289,9 @@ mod example {
             ReplCommand::Inject(()) => {
                 context.load_debuginfo_if_necessary()?;
 
-                return headcrab_inject::inject_clif_code(
-                    context.remote()?,
-                    context.debuginfo().get_symbol_address("puts").unwrap() as u64,
-                );
+                return headcrab_inject::inject_clif_code(context.remote()?, &|sym| {
+                    context.debuginfo().get_symbol_address(sym).unwrap() as u64
+                });
             }
             ReplCommand::Exit(()) => unreachable!("Should be handled earlier"),
         }
