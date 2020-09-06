@@ -18,7 +18,7 @@ mod example {
     };
 
     use headcrab::{
-        symbol::{DisassemblySource, RelocatedDwarf},
+        symbol::{pretty, CrabResult, DisassemblySource, RelocatedDwarf, Snippet},
         target::{AttachOptions, LinuxTarget, UnixTarget},
     };
 
@@ -27,8 +27,6 @@ mod example {
 
     use repl_tools::HighlightAndComplete;
     use rustyline::CompletionType;
-
-    pub type CrabResult<T> = Result<T, Box<dyn std::error::Error>>;
 
     repl_tools::define_repl_cmds!(enum ReplCommand {
         err = ReplCommandError;
@@ -616,53 +614,18 @@ mod example {
                                 )
                             })
                             .unwrap_or_default();
-
-                        print_file_lines_with_context(
+                        Snippet::from_file(
                             file,
                             line as usize,
-                            column,
                             context_lines as usize,
-                        )?;
+                            column as usize,
+                        )?
+                        .highlight();
                         break;
                     }
                 }
                 Ok(())
             })?;
-        Ok(())
-    }
-
-    fn print_file_lines_with_context(
-        filename: &str,
-        line_no: usize,
-        column: u32,
-        context_lines: usize,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        let file = File::open(&filename)?;
-        let reader = BufReader::new(file);
-
-        // The line number from the debuginfo is starts at 1 but the one for iterator starts at 0.
-        let key = line_no - 1;
-        let start = if key > context_lines {
-            key - context_lines
-        } else {
-            0
-        };
-        let end = key + context_lines;
-
-        println!("{}:{}:{}", filename, line_no, column);
-
-        for (i, line) in reader.lines().enumerate().skip(start) {
-            if i == key {
-                println!(">{:4} {}", i + 1, line?);
-            } else if i <= end {
-                println!("{:5} {}", i + 1, line?);
-            } else {
-                // If we have printed the asked for line and the context around it,
-                // There is no point in iterating through the whole file. So, break
-                // out of the loop and make an early return.
-                break;
-            }
-        }
         Ok(())
     }
 

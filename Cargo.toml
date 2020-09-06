@@ -17,6 +17,7 @@ object = "0.20"
 gimli = "0.22.0"
 capstone = "0.7.0"
 addr2line = "0.13.0"
+syntect = "4.4.0"
 
 # Dependencies specific to macOS & Linux
 [target.'cfg(unix)'.dependencies]

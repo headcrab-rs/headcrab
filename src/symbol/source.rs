@@ -1,5 +1,8 @@
 use capstone::Capstone;
 
+use std::fs::File;
+use std::io::{prelude::*, BufReader};
+
 pub struct DisassemblySource(Capstone);
 
 impl DisassemblySource {
@@ -76,5 +79,142 @@ impl super::Dwarf {
             .nth(line as usize)
             .ok_or_else(|| "Line not found".to_string())?
             .to_string())
+    }
+}
+
+pub type CrabResult<T> = Result<T, Box<dyn std::error::Error>>;
+
+#[derive(Debug)]
+/// A line in a source code is represented as a line number and the string.
+struct SourceLine {
+    line_no: usize,
+    line_str: String,
+}
+
+#[derive(Debug)]
+/// This represents a snippet of source code. The snippet usually consists of a key line and some
+/// lines of context around it.
+pub struct Snippet {
+    /// The full path to the file, whose snippet we capture.
+    file_path: String,
+    /// The lines from the source file that is part of the snippet. Lines are a tuple of line
+    /// number and the line string
+    lines: Vec<SourceLine>,
+    /// The index of the key line in the `lines` vector. If there is no specified key, then it will
+    /// be 0.
+    key_line_idx: usize,
+    /// The column containing the symbol we are interested in.
+    key_column_idx: usize,
+}
+
+impl Snippet {
+    /// This creates a source code snippet given the source file and the key line and the
+    /// surrounding line count as context.
+    pub fn from_file(
+        file_path: &str,
+        line_no: usize,
+        lines_as_context: usize,
+        column: usize,
+    ) -> CrabResult<Self> {
+        if line_no == 0 {
+            return Err("Line numbers should start at 1.".into());
+        }
+        let file = File::open(file_path)?;
+        let reader = BufReader::new(file);
+        let mut lines = vec![];
+
+        // The line number from the debuginfo starts at 1 but the one for iterator gives by
+        // `reader.lines()` starts at 0.
+        let key = line_no - 1;
+        let start = if key > lines_as_context {
+            key - lines_as_context
+        } else {
+            0
+        };
+        let end = key + lines_as_context;
+        for (i, line) in reader.lines().enumerate().skip(start) {
+            if i <= end {
+                lines.push(SourceLine {
+                    line_no: i + 1,
+                    line_str: line?,
+                });
+            } else {
+                // If we have printed the asked for line and the context around it,
+                // There is no point in iterating through the whole file. So, break
+                // out of the loop and make an early return.
+                break;
+            }
+        }
+        Ok(Snippet {
+            file_path: file_path.to_string(),
+            lines,
+            key_line_idx: lines_as_context,
+            key_column_idx: column - 1,
+        })
+    }
+}
+pub mod pretty {
+    use super::{Snippet, SourceLine};
+    use syntect::{
+        easy::HighlightLines,
+        highlighting::{Style, ThemeSet},
+        parsing::SyntaxSet,
+    };
+
+    lazy_static::lazy_static! {
+        static ref SYNTAX_SET: SyntaxSet = SyntaxSet::load_defaults_nonewlines();
+        static ref THEME_SET: ThemeSet = ThemeSet::load_defaults();
+    }
+    impl Snippet {
+        pub fn highlight(&self) {
+            let t = &THEME_SET.themes["Solarized (dark)"];
+            let mut h = HighlightLines::new(
+                &SYNTAX_SET
+                    .find_syntax_by_extension("rs")
+                    .unwrap()
+                    .to_owned(),
+                t,
+            );
+            for (idx, SourceLine { line_no, line_str }) in self.lines.iter().enumerate() {
+                let line_marker = if idx == self.key_line_idx {
+                    "\x1b[91m>\x1b[0m"
+                } else {
+                    " \x1b[2m"
+                };
+                let hl_line = h.highlight(line_str, &SYNTAX_SET);
+                eprintln!(
+                    "{} {:>6} | {}",
+                    line_marker,
+                    *line_no,
+                    as_16_bit_terminal_escaped(&hl_line[..])
+                );
+                if idx == self.key_line_idx && self.key_column_idx != 0 {
+                    eprintln!(
+                        "         | {:width$}\x1b[91m^\x1b[0m",
+                        " ",
+                        width = self.key_column_idx
+                    );
+                }
+            }
+        }
+    }
+
+    fn as_16_bit_terminal_escaped(v: &[(Style, &str)]) -> String {
+        use std::fmt::Write;
+        let mut s: String = String::new();
+        for &(ref style, text) in v.iter() {
+            // 256/6 = 42
+            write!(
+                s,
+                "\x1b[38;5;{}m{}",
+                16u8 + 36 * (style.foreground.r / 42)
+                    + 6 * (style.foreground.g / 42)
+                    + (style.foreground.b / 42),
+                text
+            )
+            .unwrap();
+        }
+        s.push_str("\x1b[0m");
+        s
     }
 }
