@@ -15,4 +15,6 @@ readme = "../README.md"
 headcrab = { version = "0.2.0", path = "../" }
 cranelift-codegen = "0.66.0"
 cranelift-reader = "0.66.0"
+cranelift-module = "0.66.0"
 libc = "0.2.76"
+target-lexicon = "0.10.0"

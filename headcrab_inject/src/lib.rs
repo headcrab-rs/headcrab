@@ -1,6 +1,13 @@
-use cranelift_codegen::{binemit, ir, isa, settings};
+use cranelift_codegen::{
+    binemit, ir, isa,
+    settings::{self, Configurable},
+};
 use headcrab::target::{LinuxTarget, UnixTarget};
 use std::error::Error;
+
+mod memory;
+
+pub use memory::Memory;
 
 #[derive(Debug)]
 struct RelocEntry {
@@ -40,13 +47,44 @@ impl binemit::RelocSink for VecRelocSink {
     }
 }
 
+// FIXME unmap memory when done
+pub struct InjectionContext<'a> {
+    target: &'a LinuxTarget,
+    code: Memory,
+    readonly: Memory,
+    readwrite: Memory,
+}
+
+impl<'a> InjectionContext<'a> {
+    pub fn new(target: &'a LinuxTarget) -> Self {
+        Self {
+            target,
+            code: Memory::new_executable(),
+            readonly: Memory::new_readonly(),
+            readwrite: Memory::new_writable(),
+        }
+    }
+
+    fn allocate_code(&mut self, size: u64) -> Result<u64, Box<dyn std::error::Error>> {
+        self.code.allocate(self.target, size, 8)
+    }
+
+    fn allocate_readonly(&mut self, size: u64) -> Result<u64, Box<dyn std::error::Error>> {
+        self.readonly.allocate(self.target, size, 8)
+    }
+
+    fn allocate_readwrite(&mut self, size: u64) -> Result<u64, Box<dyn std::error::Error>> {
+        self.readwrite.allocate(self.target, size, 8)
+    }
+}
+
 pub struct CompiledInjection {
     code_region: u64,
     rodata_region: u64,
 }
 
 pub fn compile_clif_code(
-    remote: &LinuxTarget,
+    inj_ctx: &mut InjectionContext,
     code: &str,
     puts_addr: u64,
 ) -> Result<CompiledInjection, Box<dyn Error>> {
@@ -54,8 +92,9 @@ pub fn compile_clif_code(
     assert!(functions.len() == 1);
     println!("{}", functions[0]);
 
-    let flags_builder = settings::builder();
-    let flags = settings::Flags::new(flags_builder);
+    let mut flag_builder = settings::builder();
+    flag_builder.set("use_colocated_libcalls", "false").unwrap();
+    let flags = settings::Flags::new(flag_builder);
     let isa = isa::lookup("x86_64".parse().unwrap())
         .unwrap()
         .finish(flags);
@@ -76,22 +115,9 @@ pub fn compile_clif_code(
     println!("{}", ctx.func);
     println!("{:?}", relocs.0);
 
-    let code_region = remote.mmap(
-        0 as *mut _,
-        code_mem.len(),
-        libc::PROT_READ | libc::PROT_EXEC,
-        libc::MAP_ANONYMOUS | libc::MAP_PRIVATE,
-        0,
-        0,
-    )?;
-    let rodata_region = remote.mmap(
-        0 as *mut _,
-        "Hello World from injected code!\n\0".len(),
-        libc::PROT_READ,
-        libc::MAP_ANONYMOUS | libc::MAP_PRIVATE,
-        0,
-        0,
-    )?;
+    let code_region = inj_ctx.allocate_code(code_mem.len() as u64)?;
+    let rodata_region =
+        inj_ctx.allocate_readonly("Hello World from injected code!\n\0".len() as u64)?;
 
     for reloc_entry in relocs.0 {
         let sym = match reloc_entry.name {
@@ -117,7 +143,8 @@ pub fn compile_clif_code(
         }
     }
 
-    remote
+    inj_ctx
+        .target
         .write()
         .write_slice(&code_mem, code_region as usize)
         .write_slice(
@@ -133,11 +160,12 @@ pub fn compile_clif_code(
 }
 
 pub fn inject_clif_code(remote: &LinuxTarget, puts_addr: u64) -> Result<(), Box<dyn Error>> {
+    let mut inj_ctx = InjectionContext::new(remote);
     let CompiledInjection {
         code_region,
         rodata_region: _,
     } = compile_clif_code(
-        remote,
+        &mut inj_ctx,
         r#"
     target x86_64-unknown-linux-gnu haswell
 
@@ -155,14 +183,8 @@ pub fn inject_clif_code(remote: &LinuxTarget, puts_addr: u64) -> Result<(), Box<
         puts_addr,
     )?;
 
-    let stack_region = remote.mmap(
-        0 as *mut _,
-        0x1000,
-        libc::PROT_READ | libc::PROT_WRITE,
-        libc::MAP_ANONYMOUS | libc::MAP_PRIVATE,
-        0,
-        0,
-    )?;
+    let stack_region = inj_ctx.allocate_readwrite(0x1000)?;
+
     println!(
         "code: 0x{:016x} stack: 0x{:016x}",
         code_region, stack_region
