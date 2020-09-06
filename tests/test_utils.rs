@@ -1,9 +1,6 @@
 use std::sync::Once;
 
 #[cfg(target_os = "linux")]
-use std::path::Path;
-
-#[cfg(target_os = "linux")]
 use headcrab::{
     symbol::RelocatedDwarf,
     target::{LinuxTarget, UnixTarget},
@@ -27,7 +24,7 @@ pub fn ensure_testees() {
 #[cfg(target_os = "linux")]
 #[allow(dead_code)]
 pub fn launch(path: &str) -> LinuxTarget {
-    let (target, status) = LinuxTarget::launch(Path::new(path)).unwrap();
+    let (target, status) = LinuxTarget::launch(path).unwrap();
     match status {
         nix::sys::wait::WaitStatus::Stopped(_, nix::sys::signal::SIGTRAP) => {}
         _ => panic!("Status: {:?}", status),
