@@ -1,9 +1,11 @@
+use std::{collections::HashMap, error::Error};
+
 use cranelift_codegen::{
     binemit, ir, isa,
     settings::{self, Configurable},
 };
+use cranelift_module::{DataId, FuncId};
 use headcrab::target::{LinuxTarget, UnixTarget};
-use std::error::Error;
 
 mod memory;
 
@@ -53,6 +55,8 @@ pub struct InjectionContext<'a> {
     code: Memory,
     readonly: Memory,
     readwrite: Memory,
+    functions: HashMap<FuncId, u64>,
+    data_objects: HashMap<DataId, u64>,
 }
 
 impl<'a> InjectionContext<'a> {
@@ -62,32 +66,44 @@ impl<'a> InjectionContext<'a> {
             code: Memory::new_executable(),
             readonly: Memory::new_readonly(),
             readwrite: Memory::new_writable(),
+            functions: HashMap::new(),
+            data_objects: HashMap::new(),
         }
     }
 
-    fn allocate_code(&mut self, size: u64) -> Result<u64, Box<dyn std::error::Error>> {
+    pub fn allocate_code(&mut self, size: u64) -> Result<u64, Box<dyn Error>> {
         self.code.allocate(self.target, size, 8)
     }
 
-    fn allocate_readonly(&mut self, size: u64) -> Result<u64, Box<dyn std::error::Error>> {
+    pub fn allocate_readonly(&mut self, size: u64) -> Result<u64, Box<dyn Error>> {
         self.readonly.allocate(self.target, size, 8)
     }
 
-    fn allocate_readwrite(&mut self, size: u64) -> Result<u64, Box<dyn std::error::Error>> {
+    pub fn allocate_readwrite(&mut self, size: u64) -> Result<u64, Box<dyn Error>> {
         self.readwrite.allocate(self.target, size, 8)
     }
+
+    pub fn define_function(&mut self, func_id: FuncId, addr: u64) {
+        assert!(self.functions.insert(func_id, addr).is_none());
 }
 
-pub struct CompiledInjection {
-    code_region: u64,
-    rodata_region: u64,
+    pub fn lookup_function(&self, func_id: FuncId) -> u64 {
+        self.functions[&func_id]
+}
+
+    pub fn define_data_object(&mut self, data_id: DataId, addr: u64) {
+        assert!(self.data_objects.insert(data_id, addr).is_none());
+    }
+
+    pub fn lookup_data_object(&self, data_id: DataId) -> u64 {
+        self.data_objects[&data_id]
+    }
 }
 
 pub fn compile_clif_code(
     inj_ctx: &mut InjectionContext,
     code: &str,
-    puts_addr: u64,
-) -> Result<CompiledInjection, Box<dyn Error>> {
+) -> Result<u64, Box<dyn Error>> {
     let functions = cranelift_reader::parse_functions(code).unwrap();
     assert!(functions.len() == 1);
     println!("{}", functions[0]);
@@ -116,22 +132,17 @@ pub fn compile_clif_code(
     println!("{:?}", relocs.0);
 
     let code_region = inj_ctx.allocate_code(code_mem.len() as u64)?;
-    let rodata_region =
-        inj_ctx.allocate_readonly("Hello World from injected code!\n\0".len() as u64)?;
 
     for reloc_entry in relocs.0 {
         let sym = match reloc_entry.name {
             ir::ExternalName::User {
                 namespace: 0,
-                index: 0,
-            } => {
-                // puts
-                puts_addr
-            }
+                index,
+            } => inj_ctx.lookup_function(FuncId::from_u32(index)),
             ir::ExternalName::User {
                 namespace: 1,
-                index: 0,
-            } => rodata_region,
+                index,
+            } => inj_ctx.lookup_data_object(DataId::from_u32(index)),
             _ => todo!("{:?}", reloc_entry.name),
         };
         match reloc_entry.reloc {
@@ -147,24 +158,29 @@ pub fn compile_clif_code(
         .target
         .write()
         .write_slice(&code_mem, code_region as usize)
-        .write_slice(
-            "Hello World from injected code!\n\0".as_bytes(),
-            rodata_region as usize,
-        )
         .apply()?;
 
-    Ok(CompiledInjection {
-        code_region,
-        rodata_region,
-    })
+    Ok(code_region)
 }
 
 pub fn inject_clif_code(remote: &LinuxTarget, puts_addr: u64) -> Result<(), Box<dyn Error>> {
     let mut inj_ctx = InjectionContext::new(remote);
-    let CompiledInjection {
-        code_region,
-        rodata_region: _,
-    } = compile_clif_code(
+
+    inj_ctx.define_function(FuncId::from_u32(0), puts_addr);
+
+    let hello_world_region =
+        inj_ctx.allocate_readonly("Hello World from injected code!\n\0".len() as u64)?;
+    inj_ctx
+        .target
+        .write()
+        .write_slice(
+            "Hello World from injected code!\n\0".as_bytes(),
+            hello_world_region as usize,
+        )
+        .apply()?;
+    inj_ctx.define_data_object(DataId::from_u32(0), hello_world_region);
+
+    let code_region = compile_clif_code(
         &mut inj_ctx,
         r#"
     target x86_64-unknown-linux-gnu haswell
@@ -180,7 +196,6 @@ pub fn inject_clif_code(remote: &LinuxTarget, puts_addr: u64) -> Result<(), Box<
         return
     }
     "#,
-        puts_addr,
     )?;
 
     let stack_region = inj_ctx.allocate_readwrite(0x1000)?;
