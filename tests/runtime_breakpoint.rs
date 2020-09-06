@@ -9,6 +9,7 @@ mod test_utils;
 use headcrab::{symbol::RelocatedDwarf, target::UnixTarget};
 
 static BIN_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/testees/hello");
+static LOOPING_BIN_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/testees/loop");
 
 // FIXME: this should be an internal impl detail
 #[cfg(target_os = "macos")]
@@ -83,6 +84,38 @@ fn multiple_breakpoints() -> Result<(), Box<dyn std::error::Error>> {
 
 #[cfg(target_os = "linux")]
 #[test]
+fn looping_breakpoint() -> Result<(), Box<dyn std::error::Error>> {
+    test_utils::ensure_testees();
+
+    let target = test_utils::launch(LOOPING_BIN_PATH);
+    let debuginfo = RelocatedDwarf::from_maps(&target.memory_maps()?)?;
+    let bp_addr = debuginfo
+        .get_symbol_address("breakpoint")
+        .expect("No 'breakpoint' symbol");
+    // set the breakpoint
+    let mut breakpoint = target.set_breakpoint(bp_addr)?;
+    assert!(breakpoint.is_active());
+
+    let mut status = target.unpause()?;
+    // The testee should call the `breakpoint()` function 8 times
+    // make sure we hit the breakpoint each time
+    for _ in 0..8 {
+        assert_eq!(status, test_utils::ws_sigtrap(&target));
+
+        let regs = target.read_regs()?;
+        assert_eq!(regs.rip as usize, bp_addr);
+
+        // reset the breakpoint, now that it has been hit
+        breakpoint.set().expect("could not set breakpoint");
+        assert!(breakpoint.is_active());
+        status = target.unpause()?;
+    }
+    test_utils::continue_to_end(&target);
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+#[test]
 // Make sure that calling single_step advances the P.C by 1,
 // and gives back control
 fn single_step() -> Result<(), Box<dyn std::error::Error>> {
@@ -97,7 +130,9 @@ fn single_step() -> Result<(), Box<dyn std::error::Error>> {
     // start the program
     target.unpause()?;
     // Order of instructions  according to gdb:
-    // <main>,  <main + 4>, <main + 8>, <main + 11>,  <main + 17>
+    // <main>, <main+4>, <main+8>, <main+11>,  <main+17>
+    // `si` in gdb actually skips the `push rbp` & `mov rsp rbp` instructions
+    // which means gdb goes from <main> straight to <main+4>, "skipping" the 1byte `mov`
     let offsets = [0, 1, 4, 8, 11, 17];
     for offset in offsets.iter() {
         let rip = test_utils::current_rip(&target);
