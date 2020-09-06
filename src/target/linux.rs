@@ -103,8 +103,7 @@ impl UnixTarget for LinuxTarget {
                 {
                     // Restore the program to it's uninstrumented state
                     self.restore_breakpoint(bp)?;
-                    // Find a way to let the user do things from now on, and force
-                    // calling bp.set()? somehow
+                    // Find a way to let the user do things here
                 };
             }
             _ => (),
@@ -456,14 +455,14 @@ impl LinuxTarget {
         Ok(bp)
     }
 
-    pub fn single_step(&self) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn single_step(&self) -> Result<nix::sys::wait::WaitStatus, Box<dyn std::error::Error>> {
         nix::sys::ptrace::step(self.pid(), None).map_err(|e| Box::new(e))?;
         let status = nix::sys::wait::waitpid(self.pid(), None)?;
         assert_eq!(
             status,
             nix::sys::wait::WaitStatus::Stopped(self.pid(), nix::sys::signal::SIGTRAP)
         );
-        Ok(())
+        Ok(status)
     }
 
     /// Restore the instruction shadowed by `bp` & rollback the P.C by 1

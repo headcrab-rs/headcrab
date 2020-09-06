@@ -75,7 +75,6 @@ impl Breakpoint {
     /// Wether this breakpoint has instrumented the target's code
     pub fn is_active(&self) -> bool {
         let instr = ptrace::read(self.pid, self.addr as *mut _).unwrap();
-        let value = instr & !0xff;
         (instr & 0xff) == INT3
     }
 }

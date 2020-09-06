@@ -96,9 +96,15 @@ fn single_step() -> Result<(), Box<dyn std::error::Error>> {
 
     // start the program
     target.unpause()?;
-    assert_eq!(test_utils::current_rip(&target), main_addr as u64);
-    target.single_step()?;
-    assert_eq!(test_utils::current_rip(&target), main_addr as u64 + 1);
+    // Order of instructions  according to gdb:
+    // <main>,  <main + 4>, <main + 8>, <main + 11>,  <main + 17>
+    let offsets = [0, 1, 4, 8, 11, 17];
+    for offset in offsets.iter() {
+        let rip = test_utils::current_rip(&target);
+        println!("rip: {:#012x}", rip);
+        assert_eq!(rip, (main_addr as u64 + offset),);
+        target.single_step()?;
+    }
     //assert_eq!(status, test_utils::ws_sigtrap(&target));
     test_utils::continue_to_end(&target);
     Ok(())
