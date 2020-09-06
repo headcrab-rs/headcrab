@@ -28,7 +28,7 @@ mod example {
     use repl_tools::HighlightAndComplete;
     use rustyline::CompletionType;
 
-    pub type CrabResult<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+    pub type CrabResult<T> = Result<T, Box<dyn std::error::Error>>;
 
     repl_tools::define_repl_cmds!(enum ReplCommand {
         err = ReplCommandError;
@@ -88,7 +88,9 @@ mod example {
             match value {
                 "fp" | "" => Ok(BacktraceType::FramePtr),
                 "naive" => Ok(BacktraceType::Naive),
-                &_ => Err(format!("Unrecognized backtrace type {}. Supported ones are 'fp' and 'naive'. Please consider using one of them.", value).into()),
+                _ => {
+                        Err(format!("Unrecognized backtrace type {}. Supported ones are 'fp' and 'naive'. Please consider using one of them.", value).into())
+                    },
             }
         }
     }
@@ -297,7 +299,7 @@ mod example {
             ReplCommand::Continue(()) => {
                 println!("{:?}", context.remote()?.unpause()?);
                 // When we hit the next breakpoint, we also want to display the source code
-                // as does lldb and gdb.
+                // as lldb and gdb does.
                 return print_source_for_top_of_stack_symbol(context, 3);
             }
             ReplCommand::Registers(sub_cmd) => match &*sub_cmd {
@@ -599,8 +601,8 @@ mod example {
                         .map_err(|err: gimli::Error| err)?
                         .unwrap_or_else(|| "<unknown>".to_string());
 
-                    // TODO: currently we are skipping over mm_pause but once we have real
-                    // breakpoint support and _patch_breakpoint_function gets removed, this
+                    // TODO: currently we are skipping over `_mm_pause` but once we have real
+                    // breakpoint support and `_patch_breakpoint_function` gets removed, this
                     // must also be removed.
                     if !name.contains("_mm_pause") {
                         let (file, line, column) = frame
@@ -650,16 +652,8 @@ mod example {
         println!("{}:{}:{}", filename, line_no, column);
 
         for (i, line) in reader.lines().enumerate().skip(start) {
-            {
-                //let l = line.unwrap().clone();
-                //println!("{}", String::highlight(l.as_str()));
-            }
             if i == key {
-                println!(
-                    ">{:4} {}",
-                    i + 1,
-                    String::highlight(line?.as_str()).to_string()
-                );
+                println!(">{:4} {}", i + 1, line?);
             } else if i <= end {
                 println!("{:5} {}", i + 1, line?);
             } else {
@@ -768,6 +762,7 @@ mod example {
             local.name()?.unwrap_or("<no name>"),
             value
         );
+
         Ok(())
     }
 
