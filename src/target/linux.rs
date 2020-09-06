@@ -479,7 +479,7 @@ impl LinuxTarget {
     }
 
     /// Disable the breakpoint. Call `set()` on the Breakpoint to enable it again
-    pub fn unregister_breakpoint(
+    pub fn disable_breakpoint(
         &self,
         bp: &mut Breakpoint,
     ) -> Result<(), Box<dyn std::error::Error>> {
