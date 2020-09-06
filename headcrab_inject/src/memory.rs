@@ -85,7 +85,7 @@ impl Memory {
 
     pub fn new_writable() -> Self {
         Self {
-            prot: libc::PROT_READ | libc::PROT_EXEC,
+            prot: libc::PROT_READ | libc::PROT_WRITE,
             allocations: Vec::new(),
             current: PtrLen::new(),
             position: 0,
