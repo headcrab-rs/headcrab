@@ -1,5 +1,6 @@
 use cranelift_codegen::{binemit, ir, isa, settings};
 use headcrab::target::{LinuxTarget, UnixTarget};
+use std::error::Error;
 
 #[derive(Debug)]
 struct RelocEntry {
@@ -39,27 +40,17 @@ impl binemit::RelocSink for VecRelocSink {
     }
 }
 
-pub fn inject_clif_code(
+pub struct CompiledInjection {
+    code_region: u64,
+    rodata_region: u64,
+}
+
+pub fn compile_clif_code(
     remote: &LinuxTarget,
+    code: &str,
     puts_addr: u64,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let functions = cranelift_reader::parse_functions(
-        r#"
-    target x86_64-unknown-linux-gnu haswell
-
-    function u0:0() system_v {
-        gv0 = symbol colocated u1:0
-        sig0 = (i64) system_v
-        fn0 = u0:0 sig0
-
-    block0:
-        v0 = global_value.i64 gv0
-        call fn0(v0)
-        return
-    }
-    "#,
-    )
-    .unwrap();
+) -> Result<CompiledInjection, Box<dyn Error>> {
+    let functions = cranelift_reader::parse_functions(code).unwrap();
     assert!(functions.len() == 1);
     println!("{}", functions[0]);
 
@@ -101,18 +92,6 @@ pub fn inject_clif_code(
         0,
         0,
     )?;
-    let stack_region = remote.mmap(
-        0 as *mut _,
-        0x1000,
-        libc::PROT_READ | libc::PROT_WRITE,
-        libc::MAP_ANONYMOUS | libc::MAP_PRIVATE,
-        0,
-        0,
-    )?;
-    println!(
-        "code: 0x{:016x} stack: 0x{:016x}",
-        code_region, stack_region
-    );
 
     for reloc_entry in relocs.0 {
         let sym = match reloc_entry.name {
@@ -146,6 +125,48 @@ pub fn inject_clif_code(
             rodata_region as usize,
         )
         .apply()?;
+
+    Ok(CompiledInjection {
+        code_region,
+        rodata_region,
+    })
+}
+
+pub fn inject_clif_code(remote: &LinuxTarget, puts_addr: u64) -> Result<(), Box<dyn Error>> {
+    let CompiledInjection {
+        code_region,
+        rodata_region: _,
+    } = compile_clif_code(
+        remote,
+        r#"
+    target x86_64-unknown-linux-gnu haswell
+
+    function u0:0() system_v {
+        gv0 = symbol colocated u1:0
+        sig0 = (i64) system_v
+        fn0 = u0:0 sig0
+
+    block0:
+        v0 = global_value.i64 gv0
+        call fn0(v0)
+        return
+    }
+    "#,
+        puts_addr,
+    )?;
+
+    let stack_region = remote.mmap(
+        0 as *mut _,
+        0x1000,
+        libc::PROT_READ | libc::PROT_WRITE,
+        libc::MAP_ANONYMOUS | libc::MAP_PRIVATE,
+        0,
+        0,
+    )?;
+    println!(
+        "code: 0x{:016x} stack: 0x{:016x}",
+        code_region, stack_region
+    );
 
     let orig_regs = remote.read_regs()?;
     println!("{:?}", orig_regs);
