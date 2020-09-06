@@ -138,7 +138,7 @@ fn single_step() -> Result<(), Box<dyn std::error::Error>> {
         let rip = test_utils::current_ip(&target);
         //println!("rip: {:#012x}", rip);
         assert_eq!(rip, (main_addr as u64 + offset),);
-        let status = target.single_step()?;
+        let status = target.step()?;
         assert_eq!(status, test_utils::ws_sigtrap(&target));
     }
     test_utils::continue_to_end(&target);
