@@ -7,6 +7,7 @@ mod writemem;
 use crate::target::thread::Thread;
 use crate::target::unix::{self, UnixTarget};
 use nix::sys::ptrace;
+use nix::sys::wait::{waitpid, WaitStatus};
 use nix::unistd::{getpid, Pid};
 use procfs::process::{Process, Task};
 use procfs::ProcError;
@@ -90,12 +91,12 @@ impl UnixTarget for LinuxTarget {
         self.pid
     }
 
-    fn unpause(&self) -> Result<nix::sys::wait::WaitStatus, Box<dyn std::error::Error>> {
+    fn unpause(&self) -> Result<WaitStatus, Box<dyn std::error::Error>> {
         ptrace::cont(self.pid(), None)?;
-        let status = nix::sys::wait::waitpid(self.pid(), None)?;
+        let status = waitpid(self.pid(), None)?;
         match status {
             // We may have hit a user defined breakpoint
-            nix::sys::wait::WaitStatus::Stopped(_, nix::sys::signal::Signal::SIGTRAP) => {
+            WaitStatus::Stopped(_, nix::sys::signal::Signal::SIGTRAP) => {
                 if let Some(bp) = self
                     .breakpoints
                     .borrow_mut()
@@ -122,9 +123,7 @@ impl LinuxTarget {
     }
 
     /// Launches a new debuggee process
-    pub fn launch(
-        path: &str,
-    ) -> Result<(LinuxTarget, nix::sys::wait::WaitStatus), Box<dyn std::error::Error>> {
+    pub fn launch(path: &str) -> Result<(LinuxTarget, WaitStatus), Box<dyn std::error::Error>> {
         let (pid, status) = unix::launch(CString::new(path)?)?;
         let target = LinuxTarget::new(pid);
         target.kill_on_exit()?;
@@ -135,7 +134,7 @@ impl LinuxTarget {
     pub fn attach(
         pid: Pid,
         options: AttachOptions,
-    ) -> Result<(LinuxTarget, nix::sys::wait::WaitStatus), Box<dyn std::error::Error>> {
+    ) -> Result<(LinuxTarget, WaitStatus), Box<dyn std::error::Error>> {
         let status = unix::attach(pid)?;
         let target = LinuxTarget::new(pid);
 
@@ -208,7 +207,7 @@ impl LinuxTarget {
 
         // Perform syscall
         nix::sys::ptrace::step(self.pid(), None)?;
-        nix::sys::wait::waitpid(self.pid(), None)?;
+        waitpid(self.pid(), None)?;
 
         // Read return value
         let res = self.read_regs()?.rax;
@@ -455,12 +454,12 @@ impl LinuxTarget {
         Ok(bp)
     }
 
-    pub fn single_step(&self) -> Result<nix::sys::wait::WaitStatus, Box<dyn std::error::Error>> {
+    pub fn single_step(&self) -> Result<WaitStatus, Box<dyn std::error::Error>> {
         nix::sys::ptrace::step(self.pid(), None).map_err(|e| Box::new(e))?;
-        let status = nix::sys::wait::waitpid(self.pid(), None)?;
+        let status = waitpid(self.pid(), None)?;
         assert_eq!(
             status,
-            nix::sys::wait::WaitStatus::Stopped(self.pid(), nix::sys::signal::SIGTRAP)
+            WaitStatus::Stopped(self.pid(), nix::sys::signal::SIGTRAP)
         );
         Ok(status)
     }
