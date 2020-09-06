@@ -92,7 +92,7 @@ fn single_step() -> Result<(), Box<dyn std::error::Error>> {
     let main_addr = debuginfo
         .get_symbol_address("main")
         .expect("No 'main' symbol in target program.");
-    let _main = target.set_breakpoint(main_addr)?;
+    let _ = target.set_breakpoint(main_addr)?;
 
     // start the program
     target.unpause()?;
@@ -101,11 +101,11 @@ fn single_step() -> Result<(), Box<dyn std::error::Error>> {
     let offsets = [0, 1, 4, 8, 11, 17];
     for offset in offsets.iter() {
         let rip = test_utils::current_rip(&target);
-        println!("rip: {:#012x}", rip);
+        //println!("rip: {:#012x}", rip);
         assert_eq!(rip, (main_addr as u64 + offset),);
-        target.single_step()?;
+        let status = target.single_step()?;
+        assert_eq!(status, test_utils::ws_sigtrap(&target));
     }
-    //assert_eq!(status, test_utils::ws_sigtrap(&target));
     test_utils::continue_to_end(&target);
     Ok(())
 }
