@@ -94,21 +94,18 @@ impl UnixTarget for LinuxTarget {
     fn unpause(&self) -> Result<WaitStatus, Box<dyn std::error::Error>> {
         ptrace::cont(self.pid(), None)?;
         let status = waitpid(self.pid(), None)?;
-        match status {
-            // We may have hit a user defined breakpoint
-            WaitStatus::Stopped(_, nix::sys::signal::Signal::SIGTRAP) => {
-                if let Some(bp) = self
-                    .breakpoints
-                    .borrow_mut()
-                    .get_mut(&(self.read_regs()?.rip as usize - 1))
-                {
-                    // Restore the program to it's uninstrumented state
-                    self.restore_breakpoint(bp)?;
-                    // Find a way to let the user do things here
-                };
-            }
-            _ => (),
-        };
+        // We may have hit a user defined breakpoint
+        if let WaitStatus::Stopped(_, nix::sys::signal::Signal::SIGTRAP) = status {
+            if let Some(bp) = self
+                .breakpoints
+                .borrow_mut()
+                .get_mut(&(self.read_regs()?.rip as usize - 1))
+            {
+                // Restore the program to it's uninstrumented state
+                self.restore_breakpoint(bp)?;
+                // Find a way to let the user do things here
+            };
+        }
         Ok(status)
     }
 }
@@ -206,7 +203,7 @@ impl LinuxTarget {
         )?;
 
         // Perform syscall
-        nix::sys::ptrace::step(self.pid(), None)?;
+        ptrace::step(self.pid(), None)?;
         waitpid(self.pid(), None)?;
 
         // Read return value
