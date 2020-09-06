@@ -6,37 +6,13 @@
 use nix::sys::ptrace;
 use nix::unistd::Pid;
 const INT3: libc::c_long = 0xcc;
-/*
-pub struct Breakpoint2 {
-    bp: Breakpoint,
-    callback: Box<dyn FnMut(i32, i32)>,
-}
-
-impl Breakpoint2 {
-    pub fn new(
-        addr: usize,
-        pid: Pid,
-        callback: Box<dyn FnMut(i32, i32)>,
-    ) -> Result<Self, BreakpointError> {
-        let bp = Breakpoint::new(addr, pid)?;
-        Ok(Breakpoint2 { bp, callback })
-    }
-
-    fn test() {
-        let cb = |i1, i2| {
-            i1 + i2;
-        };
-        Breakpoint2::new(123, nix::unistd::Pid::this(), Box::new(cb));
-    }
-}
-*/
 
 #[derive(Debug, Copy, Clone)]
 pub struct Breakpoint {
     /// The address at which the debugger should insert this breakpoint
     pub addr: usize,
-    /// The shadowed variable
-    pub(crate) shadow: i64,
+    /// The original instruction overwritten by the breakpoint
+    pub(super) shadow: i64,
     pid: Pid,
 }
 
@@ -46,6 +22,7 @@ impl Breakpoint {
         let shadow = ptrace::read(pid, addr as *mut _)?;
         Ok(Breakpoint { addr, shadow, pid })
     }
+
     /// Put in place the trap instruction
     pub fn set(&mut self) -> Result<(), BreakpointError> {
         if self.is_active() {
