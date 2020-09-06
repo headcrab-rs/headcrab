@@ -287,8 +287,6 @@ mod example {
                 return show_locals(context);
             }
             ReplCommand::Inject(()) => {
-                println!("WIP");
-
                 context.load_debuginfo_if_necessary()?;
 
                 return headcrab_inject::inject_clif_code(

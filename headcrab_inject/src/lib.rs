@@ -106,7 +106,6 @@ pub fn compile_clif_code(
 ) -> Result<u64, Box<dyn Error>> {
     let functions = cranelift_reader::parse_functions(code).unwrap();
     assert!(functions.len() == 1);
-    println!("{}", functions[0]);
 
     let mut flag_builder = settings::builder();
     flag_builder.set("use_colocated_libcalls", "false").unwrap();
@@ -128,8 +127,6 @@ pub fn compile_clif_code(
         &mut binemit::NullStackmapSink {},
     )
     .unwrap();
-    println!("{}", ctx.func);
-    println!("{:?}", relocs.0);
 
     let code_region = inj_ctx.allocate_code(code_mem.len() as u64)?;
 
@@ -185,7 +182,7 @@ pub fn inject_clif_code(remote: &LinuxTarget, puts_addr: u64) -> Result<(), Box<
         r#"
     target x86_64-unknown-linux-gnu haswell
 
-    function u0:0() system_v {
+    function u0:1() system_v {
         gv0 = symbol colocated u1:0
         sig0 = (i64) system_v
         fn0 = u0:0 sig0
