@@ -561,8 +561,8 @@ mod example {
         Ok(call_stack)
     }
 
-    /// Get the call_stack from the context and then tries to display the
-    /// source for the top call in the stack. Becasue the first frame is usually
+    /// Gets the call_stack from the context and then tries to display the
+    /// source for the top call in the stack. Because the first frame is usually
     /// sse2.rs, we just display the file and line but not the source and we skip
     /// over to the next frame. For the next frame, we will display the source code.
     /// An example view is shown below:
@@ -621,6 +621,7 @@ mod example {
                             column,
                             context_lines as usize,
                         )?;
+                        break;
                     }
                 }
                 Ok(())
@@ -649,10 +650,18 @@ mod example {
         println!("{}:{}:{}", filename, line_no, column);
 
         for (i, line) in reader.lines().enumerate().skip(start) {
+            {
+                //let l = line.unwrap().clone();
+                //println!("{}", String::highlight(l.as_str()));
+            }
             if i == key {
-                println!(">{:4} {}", i, line?);
+                println!(
+                    ">{:4} {}",
+                    i + 1,
+                    String::highlight(line?.as_str()).to_string()
+                );
             } else if i <= end {
-                println!("{:5} {}", i, line?);
+                println!("{:5} {}", i + 1, line?);
             } else {
                 // If we have printed the asked for line and the context around it,
                 // There is no point in iterating through the whole file. So, break
