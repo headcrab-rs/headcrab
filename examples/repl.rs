@@ -10,10 +10,47 @@ fn main() {
 
 #[cfg(target_os = "linux")]
 mod example {
+    use std::path::{Path, PathBuf};
+
     use headcrab::{
         symbol::{DisassemblySource, RelocatedDwarf},
         target::{AttachOptions, LinuxTarget, UnixTarget},
     };
+
+    use repl_tools::HighlightAndComplete;
+    use rustyline::CompletionType;
+
+    repl_tools::define_repl_cmds!(enum ReplCommand {
+        err = ReplCommandError;
+
+        /// Start a program to debug
+        Exec: PathBuf,
+        /// Attach to an existing program
+        Attach: String,
+        /// Detach from the debugged program. Leaving it running when headcrab exits
+        Detach: (),
+        /// Kill the program being debugged
+        Kill: (),
+        /// Step one instruction
+        Stepi|si: (),
+        /// Continue the program being debugged
+        Continue|cont: (),
+        // FIXME move the `read:` part before the `--` in the help
+        /// read: List registers and their content for the current stack frame
+        Registers|regs: String,
+        /// Print backtrace of stack frames
+        Backtrace|bt: String,
+        /// Disassemble some a several instructions starting at the instruction pointer
+        Disassemble|dis: (),
+        /// Print all local variables of current stack frame
+        Locals: (),
+        /// Print this help
+        Help|h: (),
+        /// Exit
+        Exit|quit|q: (),
+    });
+
+    type ReplHelper = repl_tools::MakeHelper<ReplCommand>;
 
     struct Context {
         remote: Option<LinuxTarget>,
@@ -50,9 +87,14 @@ mod example {
     }
 
     pub fn main() {
-        let mut rl = rustyline::Editor::<()>::with_config(
-            rustyline::Config::builder().auto_add_history(true).build(),
+        let mut rl = rustyline::Editor::<ReplHelper>::with_config(
+            rustyline::Config::builder()
+                .auto_add_history(true)
+                .completion_type(CompletionType::List)
+                .build(),
         );
+        rl.set_helper(Some(ReplHelper::new(true /* color */)));
+
         let mut context = Context {
             remote: None,
             debuginfo: None,
@@ -73,6 +115,10 @@ mod example {
                         "Found flag -ex without argument".to_string()
                     }
                 }
+                "--no-color" => {
+                    rl.helper_mut().unwrap().color = false;
+                    continue;
+                }
                 _ if arg.starts_with("-") => {
                     format!("Found argument '{}' which wasn't expected", arg)
                 }
@@ -92,7 +138,8 @@ mod example {
         {} [OPTIONS] executable-file
 
     OPTIONS:
-        -ex <COMMAND>           Run command on startup",
+        -ex <COMMAND>           Run command on startup
+        --no-color              Disable colors",
                 err, repl_name
             );
             std::process::exit(1);
@@ -100,24 +147,36 @@ mod example {
 
         if let Some(exec_cmd) = exec_cmd {
             println!("Starting program: {}", exec_cmd);
-            context.set_remote(match LinuxTarget::launch(&exec_cmd) {
+            context.set_remote(match LinuxTarget::launch(Path::new(&exec_cmd)) {
                 Ok((target, status)) => {
                     println!("{:?}", status);
                     target
                 }
                 Err(err) => {
-                    println!("\x1b[91mError while launching debuggee: {}\x1b[0m", err);
+                    if rl.helper().unwrap().color {
+                        println!("\x1b[91mError while launching debuggee: {}\x1b[0m", err);
+                    } else {
+                        println!("Error while launching debuggee: {}", err);
+                    }
                     std::process::exit(1);
                 }
             });
         }
 
         for command in cmds.into_iter() {
-            println!("\x1b[96m> {}\x1b[0m", command);
-            match run_command(&mut context, &command) {
+            if rl.helper().unwrap().color {
+                println!("\x1b[96m> {}\x1b[0m", command);
+            } else {
+                println!("> {}", command);
+            }
+            match run_command(&mut context, rl.helper().unwrap().color, &command) {
                 Ok(()) => {}
                 Err(err) => {
-                    println!("\x1b[91mError: {}\x1b[0m", err);
+                    if rl.helper().unwrap().color {
+                        println!("\x1b[91mError: {}\x1b[0m", err);
+                    } else {
+                        println!("Error: {}", err);
+                    }
                 }
             }
         }
@@ -129,10 +188,14 @@ mod example {
                         println!("Exit");
                         return;
                     }
-                    match run_command(&mut context, &command) {
+                    match run_command(&mut context, rl.helper().unwrap().color, &command) {
                         Ok(()) => {}
                         Err(err) => {
-                            println!("\x1b[91mError: {}\x1b[0m", err);
+                            if rl.helper().unwrap().color {
+                                println!("\x1b[91mError: {}\x1b[0m", err);
+                            } else {
+                                println!("Error: {}", err);
+                            }
                         }
                     }
                 }
@@ -142,155 +205,70 @@ mod example {
                     return;
                 }
                 Err(err) => {
-                    println!("\x1b[91mError: {:?}\x1b[0m", err);
+                    if rl.helper().unwrap().color {
+                        println!("\x1b[91mError: {:?}\x1b[0m", err);
+                    } else {
+                        println!("Error: {:?}", err);
+                    }
                     std::process::exit(1);
                 }
             }
         }
     }
 
-    fn run_command(context: &mut Context, command: &str) -> Result<(), Box<dyn std::error::Error>> {
-        let mut parts = command.trim().split(' ').map(str::trim);
-        match parts.next() {
-            Some("h") | Some("help") => {
-                println!("\x1b[1mList of Commands\x1b[0m");
-                println!("\x1b[1mexec\x1b[0m-- Start a program to debug");
-                println!("\x1b[1mattach\x1b[0m -- Attach to an existing program");
-                println!("\x1b[1mdetach\x1b[0m -- Detach from the debugged program. Leaving it running when headcrab exits");
-                println!("\x1b[1mkill\x1b[0m -- Kill the program being debugged");
-                println!("\x1b[1mstepi|si\x1b[0m -- Step one instruction");
-                println!("\x1b[1mcontinue|cont\x1b[0m -- Continue the program being debugged");
-                println!("\x1b[1mregisters|regs\x1b[0m read -- List registers and their content for the current stack frame");
-                println!("\x1b[1mbacktrace|bt\x1b[0m -- Print backtrace of stack frames");
-                println!("\x1b[1mdisassemble|dis\x1b[0m -- Print the disassembled source");
-                println!(
-                    "\x1b[1mlocals\x1b[0m -- Print all local variables of current stack frame"
-                );
-                println!("\x1b[1mhelp|h\x1b[0m -- Print this help");
-                println!("\x1b[1mexit|quit|q\x1b[0m -- Exit");
+    fn run_command(
+        context: &mut Context,
+        color: bool,
+        command: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        if command == "" {
+            return Ok(());
+        } else if command == "_patch_breakpoint_function" {
+            return patch_breakpoint_function(context);
+        }
+
+        let command = ReplCommand::from_str(command)?;
+        match command {
+            ReplCommand::Help(()) => {
+                ReplCommand::print_help(std::io::stdout(), color).unwrap();
             }
-            Some("exec") => {
-                if let Some(cmd) = parts.next() {
-                    println!("Starting program: {}", cmd);
-                    let (remote, status) = LinuxTarget::launch(cmd)?;
-                    println!("{:?}", status);
-                    context.set_remote(remote);
-                }
+            ReplCommand::Exec(cmd) => {
+                println!("Starting program: {}", cmd.display());
+                let (remote, status) = LinuxTarget::launch(&cmd)?;
+                println!("{:?}", status);
+                context.set_remote(remote);
             }
-            Some("attach") => {
-                if let Some(pid) = parts.next() {
-                    let pid = nix::unistd::Pid::from_raw(pid.parse()?);
-                    println!("Attaching to process {}", pid);
-                    let (remote, status) = LinuxTarget::attach(
-                        pid,
-                        AttachOptions {
-                            kill_on_exit: false,
-                        },
-                    )?;
-                    println!("{:?}", status);
-                    // FIXME detach or kill old remote
-                    context.set_remote(remote);
-                }
+            ReplCommand::Attach(pid) => {
+                let pid = nix::unistd::Pid::from_raw(pid.parse()?);
+                println!("Attaching to process {}", pid);
+                let (remote, status) = LinuxTarget::attach(
+                    pid,
+                    AttachOptions {
+                        kill_on_exit: false,
+                    },
+                )?;
+                println!("{:?}", status);
+                // FIXME detach or kill old remote
+                context.set_remote(remote);
             }
-            Some("detach") => {
+            ReplCommand::Detach(()) => {
                 context.remote()?.detach()?;
                 context.remote = None;
             }
-            Some("kill") => println!("{:?}", context.remote()?.kill()?),
-            Some("si") | Some("stepi") => println!("{:?}", context.remote()?.step()?),
-            Some("cont") | Some("continue") => println!("{:?}", context.remote()?.unpause()?),
-            Some("regs") | Some("registers") => match parts.next() {
-                Some("read") => println!("{:?}", context.remote()?.read_regs()?),
-                Some(sub) => Err(format!("Unknown `regs` subcommand `{}`", sub))?,
-                None => Err(format!(
+            ReplCommand::Kill(()) => println!("{:?}", context.remote()?.kill()?),
+            ReplCommand::Stepi(()) => println!("{:?}", context.remote()?.step()?),
+            ReplCommand::Continue(()) => println!("{:?}", context.remote()?.unpause()?),
+            ReplCommand::Registers(sub_cmd) => match &*sub_cmd {
+                "" => Err(format!(
                     "Expected subcommand found nothing. Try `regs read`"
                 ))?,
+                "read" => println!("{:?}", context.remote()?.read_regs()?),
+                _ => Err(format!("Unknown `regs` subcommand `{}`", sub_cmd))?,
             },
-            Some("bt") | Some("backtrace") => {
-                context.load_debuginfo_if_necessary()?;
-
-                let regs = context.remote()?.read_regs()?;
-
-                // Read stack
-                let mut stack: [usize; 1024] = [0; 1024];
-                unsafe {
-                    context
-                        .remote()?
-                        .read()
-                        .read(&mut stack, regs.rsp as usize)
-                        .apply()?;
-                }
-
-                let call_stack: Vec<_> = match parts.next() {
-                    Some("fp") | None => headcrab::symbol::unwind::frame_pointer_unwinder(
-                        context.debuginfo(),
-                        &stack[..],
-                        regs.rip as usize,
-                        regs.rsp as usize,
-                        regs.rbp as usize,
-                    )
-                    .collect(),
-                    Some("naive") => headcrab::symbol::unwind::naive_unwinder(
-                        context.debuginfo(),
-                        &stack[..],
-                        regs.rip as usize,
-                    )
-                    .collect(),
-                    Some(sub) => Err(format!("Unknown `bt` subcommand `{}`", sub))?,
-                };
-                for func in call_stack {
-                    let res = context
-                        .debuginfo()
-                        .with_addr_frames(func, |_addr, mut frames| {
-                            let mut first_frame = true;
-                            while let Some(frame) = frames.next()? {
-                                let name = frame
-                                    .function
-                                    .as_ref()
-                                    .map(|f| Ok(f.demangle()?.into_owned()))
-                                    .transpose()
-                                    .map_err(|err: gimli::Error| err)?
-                                    .unwrap_or_else(|| "<unknown>".to_string());
-
-                                let location = frame
-                                    .location
-                                    .as_ref()
-                                    .map(|loc| {
-                                        format!(
-                                            "{}:{}",
-                                            loc.file.unwrap_or("<unknown file>"),
-                                            loc.line.unwrap_or(0),
-                                        )
-                                    })
-                                    .unwrap_or_default();
-
-                                if first_frame {
-                                    println!("{:016x} {} {}", func, name, location);
-                                } else {
-                                    println!("                 {} {}", name, location);
-                                }
-
-                                first_frame = false;
-                            }
-                            Ok(first_frame)
-                        })?;
-                    match res {
-                        Some(true) | None => {
-                            println!(
-                                "{:016x} at {}",
-                                func,
-                                context
-                                    .debuginfo()
-                                    .get_address_demangled_name(func)
-                                    .as_deref()
-                                    .unwrap_or("<unknown>")
-                            );
-                        }
-                        Some(false) => {}
-                    }
-                }
+            ReplCommand::Backtrace(sub_cmd) => {
+                return show_backtrace(context, &sub_cmd);
             }
-            Some("dis") | Some("disassemble") => {
+            ReplCommand::Disassemble(()) => {
                 let ip = context.remote()?.read_regs()?.rip;
                 let mut code = [0; 64];
                 unsafe {
@@ -303,129 +281,223 @@ mod example {
                 let disassembly = context.disassembler.source_snippet(&code, ip, true)?;
                 println!("{}", disassembly);
             }
-            Some("locals") => {
-                let regs = context.remote()?.read_regs()?;
-                let func = regs.rip as usize;
-                let res = context.debuginfo().with_addr_frames(
-                    func,
-                    |func, mut frames: headcrab::symbol::FrameIter| {
-                        let mut first_frame = true;
-                        while let Some(frame) = frames.next()? {
-                            let name = frame
-                                .function
-                                .as_ref()
-                                .map(|f| Ok(f.demangle()?.into_owned()))
-                                .transpose()
-                                .map_err(|err: gimli::Error| err)?
-                                .unwrap_or_else(|| "<unknown>".to_string());
-
-                            let location = frame
-                                .location
-                                .as_ref()
-                                .map(|loc| {
-                                    format!(
-                                        "{}:{}",
-                                        loc.file.unwrap_or("<unknown file>"),
-                                        loc.line.unwrap_or(0),
-                                    )
-                                })
-                                .unwrap_or_default();
-
-                            if first_frame {
-                                println!("{:016x} {} {}", func, name, location);
-                            } else {
-                                println!("                 {} {}", name, location);
-                            }
-
-                            let (_dwarf, unit, dw_die_offset) = frame
-                                .function_debuginfo()
-                                .ok_or_else(|| "No dwarf debuginfo for function".to_owned())?;
-
-                            // FIXME handle DW_TAG_inlined_subroutine with DW_AT_frame_base in parent DW_TAG_subprogram
-                            let frame_base = if let Some(frame_base) =
-                                unit.entry(dw_die_offset)?.attr(gimli::DW_AT_frame_base)?
-                            {
-                                let frame_base = frame_base.exprloc_value().unwrap();
-                                let res = headcrab::symbol::dwarf_utils::evaluate_expression(
-                                    unit,
-                                    frame_base,
-                                    None,
-                                    get_linux_x86_64_reg(regs),
-                                )?;
-                                assert_eq!(res.len(), 1);
-                                assert_eq!(res[0].bit_offset, None);
-                                assert_eq!(res[0].size_in_bits, None);
-                                Some(match res[0].location {
-                                    gimli::Location::Register {
-                                        register: gimli::X86_64::RBP,
-                                    } => regs.rbp,
-                                    ref loc => unimplemented!("{:?}", loc), // FIXME
-                                })
-                            } else {
-                                None
-                            };
-
-                            frame.each_argument::<Box<dyn std::error::Error>, _>(
-                                func as u64,
-                                |local| show_local("arg", context, unit, frame_base, regs, local),
-                            )?;
-
-                            frame.each_local::<Box<dyn std::error::Error>, _>(
-                                func as u64,
-                                |local| show_local("    ", context, unit, frame_base, regs, local),
-                            )?;
-
-                            frame.print_debuginfo();
-
-                            first_frame = false;
-                        }
-                        Ok(first_frame)
-                    },
-                )?;
-                match res {
-                    Some(true) | None => {
-                        println!("no locals");
-                    }
-                    Some(false) => {}
-                }
+            ReplCommand::Locals(()) => {
+                return show_locals(context);
             }
+            ReplCommand::Exit(()) => unreachable!("Should be handled earlier"),
+        }
 
-            // Patch the `pause` instruction inside a function called `breakpoint` to be a
-            // breakpoint. This is useful while we don't have support for setting breakpoints at
-            // runtime yet.
-            // FIXME remove once real breakpoint support is added
-            Some("_patch_breakpoint_function") => {
-                context.load_debuginfo_if_necessary()?;
-                // Test that `a_function` resolves to a function.
-                let breakpoint_addr = context.debuginfo().get_symbol_address("breakpoint").unwrap() + 4 /* prologue */;
-                // Write breakpoint to the `breakpoint` function.
-                let mut pause_inst = 0 as libc::c_ulong;
-                unsafe {
-                    context
-                        .remote()?
-                        .read()
-                        .read(&mut pause_inst, breakpoint_addr)
-                        .apply()
-                        .unwrap();
-                }
-                // pause (rep nop); ...
-                assert_eq!(
-                    &pause_inst.to_ne_bytes()[0..2],
-                    &[0xf3, 0x90],
-                    "Pause instruction not found"
-                );
-                let mut breakpoint_inst = pause_inst.to_ne_bytes();
-                // int3; nop; ...
-                breakpoint_inst[0] = 0xcc;
-                nix::sys::ptrace::write(
-                    context.remote()?.pid(),
-                    breakpoint_addr as *mut _,
-                    libc::c_ulong::from_ne_bytes(breakpoint_inst) as *mut _,
-                )
+        Ok(())
+    }
+
+    /// Patch the `pause` instruction inside a function called `breakpoint` to be a
+    /// breakpoint. This is useful while we don't have support for setting breakpoints at
+    /// runtime yet.
+    /// FIXME remove once real breakpoint support is added
+    fn patch_breakpoint_function(context: &mut Context) -> Result<(), Box<dyn std::error::Error>> {
+        context.load_debuginfo_if_necessary()?;
+        // Test that `a_function` resolves to a function.
+        let breakpoint_addr = context.debuginfo().get_symbol_address("breakpoint").unwrap() + 4 /* prologue */;
+        // Write breakpoint to the `breakpoint` function.
+        let mut pause_inst = 0 as libc::c_ulong;
+        unsafe {
+            context
+                .remote()?
+                .read()
+                .read(&mut pause_inst, breakpoint_addr)
+                .apply()
                 .unwrap();
+        }
+        // pause (rep nop); ...
+        assert_eq!(
+            &pause_inst.to_ne_bytes()[0..2],
+            &[0xf3, 0x90],
+            "Pause instruction not found"
+        );
+        let mut breakpoint_inst = pause_inst.to_ne_bytes();
+        // int3; nop; ...
+        breakpoint_inst[0] = 0xcc;
+        nix::sys::ptrace::write(
+            context.remote()?.pid(),
+            breakpoint_addr as *mut _,
+            libc::c_ulong::from_ne_bytes(breakpoint_inst) as *mut _,
+        )
+        .unwrap();
+
+        Ok(())
+    }
+
+    fn show_backtrace(
+        context: &mut Context,
+        sub_cmd: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        context.load_debuginfo_if_necessary()?;
+
+        let regs = context.remote()?.read_regs()?;
+
+        // Read stack
+        let mut stack: [usize; 1024] = [0; 1024];
+        unsafe {
+            context
+                .remote()?
+                .read()
+                .read(&mut stack, regs.rsp as usize)
+                .apply()?;
+        }
+
+        let call_stack: Vec<_> = match sub_cmd {
+            "" | "fp" => headcrab::symbol::unwind::frame_pointer_unwinder(
+                context.debuginfo(),
+                &stack[..],
+                regs.rip as usize,
+                regs.rsp as usize,
+                regs.rbp as usize,
+            )
+            .collect(),
+            "naive" => headcrab::symbol::unwind::naive_unwinder(
+                context.debuginfo(),
+                &stack[..],
+                regs.rip as usize,
+            )
+            .collect(),
+            _ => Err(format!("Unknown `bt` subcommand `{}`", sub_cmd))?,
+        };
+        for func in call_stack {
+            let res = context
+                .debuginfo()
+                .with_addr_frames(func, |_addr, mut frames| {
+                    let mut first_frame = true;
+                    while let Some(frame) = frames.next()? {
+                        let name = frame
+                            .function
+                            .as_ref()
+                            .map(|f| Ok(f.demangle()?.into_owned()))
+                            .transpose()
+                            .map_err(|err: gimli::Error| err)?
+                            .unwrap_or_else(|| "<unknown>".to_string());
+
+                        let location = frame
+                            .location
+                            .as_ref()
+                            .map(|loc| {
+                                format!(
+                                    "{}:{}",
+                                    loc.file.unwrap_or("<unknown file>"),
+                                    loc.line.unwrap_or(0),
+                                )
+                            })
+                            .unwrap_or_default();
+
+                        if first_frame {
+                            println!("{:016x} {} {}", func, name, location);
+                        } else {
+                            println!("                 {} {}", name, location);
+                        }
+
+                        first_frame = false;
+                    }
+                    Ok(first_frame)
+                })?;
+            match res {
+                Some(true) | None => {
+                    println!(
+                        "{:016x} at {}",
+                        func,
+                        context
+                            .debuginfo()
+                            .get_address_demangled_name(func)
+                            .as_deref()
+                            .unwrap_or("<unknown>")
+                    );
+                }
+                Some(false) => {}
             }
-            Some("") | None => {}
-            Some(command) => Err(format!("Unknown command `{}`", command))?,
+        }
+        Ok(())
+    }
+
+    fn show_locals(context: &mut Context) -> Result<(), Box<dyn std::error::Error>> {
+        let regs = context.remote()?.read_regs()?;
+        let func = regs.rip as usize;
+        let res = context.debuginfo().with_addr_frames(
+            func,
+            |func, mut frames: headcrab::symbol::FrameIter| {
+                let mut first_frame = true;
+                while let Some(frame) = frames.next()? {
+                    let name = frame
+                        .function
+                        .as_ref()
+                        .map(|f| Ok(f.demangle()?.into_owned()))
+                        .transpose()
+                        .map_err(|err: gimli::Error| err)?
+                        .unwrap_or_else(|| "<unknown>".to_string());
+
+                    let location = frame
+                        .location
+                        .as_ref()
+                        .map(|loc| {
+                            format!(
+                                "{}:{}",
+                                loc.file.unwrap_or("<unknown file>"),
+                                loc.line.unwrap_or(0),
+                            )
+                        })
+                        .unwrap_or_default();
+
+                    if first_frame {
+                        println!("{:016x} {} {}", func, name, location);
+                    } else {
+                        println!("                 {} {}", name, location);
+                    }
+
+                    let (_dwarf, unit, dw_die_offset) = frame
+                        .function_debuginfo()
+                        .ok_or_else(|| "No dwarf debuginfo for function".to_owned())?;
+
+                    // FIXME handle DW_TAG_inlined_subroutine with DW_AT_frame_base in parent DW_TAG_subprogram
+                    let frame_base = if let Some(frame_base) =
+                        unit.entry(dw_die_offset)?.attr(gimli::DW_AT_frame_base)?
+                    {
+                        let frame_base = frame_base.exprloc_value().unwrap();
+                        let res = headcrab::symbol::dwarf_utils::evaluate_expression(
+                            unit,
+                            frame_base,
+                            None,
+                            get_linux_x86_64_reg(regs),
+                        )?;
+                        assert_eq!(res.len(), 1);
+                        assert_eq!(res[0].bit_offset, None);
+                        assert_eq!(res[0].size_in_bits, None);
+                        Some(match res[0].location {
+                            gimli::Location::Register {
+                                register: gimli::X86_64::RBP,
+                            } => regs.rbp,
+                            ref loc => unimplemented!("{:?}", loc), // FIXME
+                        })
+                    } else {
+                        None
+                    };
+
+                    frame.each_argument::<Box<dyn std::error::Error>, _>(func as u64, |local| {
+                        show_local("arg", context, unit, frame_base, regs, local)
+                    })?;
+
+                    frame.each_local::<Box<dyn std::error::Error>, _>(func as u64, |local| {
+                        show_local("    ", context, unit, frame_base, regs, local)
+                    })?;
+
+                    frame.print_debuginfo();
+
+                    first_frame = false;
+                }
+                Ok(first_frame)
+            },
+        )?;
+        match res {
+            Some(true) | None => {
+                println!("no locals");
+            }
+            Some(false) => {}
         }
 
         Ok(())

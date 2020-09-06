@@ -13,6 +13,7 @@ use std::{
     ffi::CString,
     fs::File,
     io::{BufRead, BufReader},
+    path::Path,
 };
 
 pub use hardware_breakpoint::{
@@ -96,9 +97,10 @@ impl LinuxTarget {
 
     /// Launches a new debuggee process
     pub fn launch(
-        path: &str,
+        path: impl AsRef<Path>,
     ) -> Result<(LinuxTarget, nix::sys::wait::WaitStatus), Box<dyn std::error::Error>> {
-        let (pid, status) = unix::launch(CString::new(path)?)?;
+        use std::os::unix::ffi::OsStrExt;
+        let (pid, status) = unix::launch(CString::new(path.as_ref().as_os_str().as_bytes())?)?;
         let target = LinuxTarget::new(pid);
         target.kill_on_exit()?;
         Ok((target, status))
