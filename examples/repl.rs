@@ -21,6 +21,8 @@ mod example {
     use rustyline::CompletionType;
 
     repl_tools::define_repl_cmds!(enum ReplCommand {
+        err = ReplCommandError;
+
         /// Start a program to debug
         Exec: PathBuf,
         /// Attach to an existing program

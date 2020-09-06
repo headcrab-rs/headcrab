@@ -1,5 +1,7 @@
 use std::{
     borrow::Cow,
+    error::Error,
+    fmt,
     marker::PhantomData,
     path::{Path, PathBuf},
 };
@@ -16,7 +18,9 @@ use rustyline::{
 pub use rustyline as __rustyline;
 
 pub trait HighlightAndComplete: Sized {
-    fn from_str(line: &str) -> Result<Self, Box<dyn std::error::Error>>;
+    type Error: Error;
+
+    fn from_str(line: &str) -> Result<Self, Self::Error>;
     fn highlight<'l>(line: &'l str) -> Cow<'l, str>;
     fn complete(
         line: &str,
@@ -84,12 +88,25 @@ impl<T: HighlightAndComplete> Completer for MakeHelper<T> {
     }
 }
 
+#[derive(Debug)]
+pub struct NoArgExpectedError(String);
+
+impl fmt::Display for NoArgExpectedError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "No arguments were expected, found `{}`", self.0)
+    }
+}
+
+impl Error for NoArgExpectedError {}
+
 impl HighlightAndComplete for () {
-    fn from_str(line: &str) -> Result<Self, Box<dyn std::error::Error>> {
+    type Error = NoArgExpectedError;
+
+    fn from_str(line: &str) -> Result<Self, NoArgExpectedError> {
         if line.trim() == "" {
             Ok(())
         } else {
-            Err(format!("No arguments were expected, found `{}`", line.trim()).into())
+            Err(NoArgExpectedError(line.trim().to_owned()))
         }
     }
 
@@ -107,8 +124,21 @@ impl HighlightAndComplete for () {
     }
 }
 
+#[derive(Debug)]
+pub enum VoidError {}
+
+impl fmt::Display for VoidError {
+    fn fmt(&self, _f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *self {}
+    }
+}
+
+impl Error for VoidError {}
+
 impl HighlightAndComplete for String {
-    fn from_str(line: &str) -> Result<Self, Box<dyn std::error::Error>> {
+    type Error = VoidError;
+
+    fn from_str(line: &str) -> Result<Self, VoidError> {
         Ok(line.trim().to_owned())
     }
 
@@ -129,7 +159,9 @@ impl HighlightAndComplete for String {
 pub struct FileNameArgument(PathBuf);
 
 impl HighlightAndComplete for PathBuf {
-    fn from_str(line: &str) -> Result<Self, Box<dyn std::error::Error>> {
+    type Error = VoidError;
+
+    fn from_str(line: &str) -> Result<Self, VoidError> {
         Ok(Path::new(line.trim()).to_owned())
     }
 
@@ -157,6 +189,7 @@ impl HighlightAndComplete for PathBuf {
 #[macro_export]
 macro_rules! define_repl_cmds {
     (enum $command:ident {
+        err = $error_ty:ident;
         $(
             #[doc = $doc:literal]
             $cmd:ident$(|$alias:ident)*: $argument:ty,
@@ -167,6 +200,27 @@ macro_rules! define_repl_cmds {
                 $cmd($argument),
             )*
         }
+
+        #[derive(Debug)]
+        enum $error_ty {
+            UnknownCommand(String),
+            $(
+                $cmd(<$argument as $crate::HighlightAndComplete>::Error),
+            )*
+        }
+
+        impl std::fmt::Display for $error_ty {
+            fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                match self {
+                    $error_ty::UnknownCommand(cmd) => write!(f, "Unknown command `{}`", cmd),
+                    $(
+                        $error_ty::$cmd(err) => write!(f, "{}: {}", stringify!($cmd).to_lowercase(), err),
+                    )*
+                }
+            }
+        }
+
+        impl std::error::Error for $error_ty {}
 
         impl $command {
             fn print_help(mut w: impl std::io::Write, color: bool) -> std::io::Result<()> {
@@ -183,17 +237,22 @@ macro_rules! define_repl_cmds {
         }
 
         impl $crate::HighlightAndComplete for $command {
-            fn from_str(line: &str) -> Result<Self, Box<dyn std::error::Error>> {
+            type Error = $error_ty;
+
+            fn from_str(line: &str) -> Result<Self, $error_ty> {
                 let cmd_len = line.find(' ').unwrap_or(line.len());
                 let (chosen_cmd, rest) = line.split_at(cmd_len);
 
                 $(
                     if [stringify!($cmd) $(,stringify!($alias))*][..].iter().any(|cmd| cmd.eq_ignore_ascii_case(chosen_cmd)) {
-                        return Ok(Self::$cmd(<$argument as $crate::HighlightAndComplete>::from_str(rest)?));
+                        return match <$argument as $crate::HighlightAndComplete>::from_str(rest) {
+                            Ok(cmd) => Ok(Self::$cmd(cmd)),
+                            Err(err) => Err($error_ty::$cmd(err)),
+                        };
                     }
                 )*
 
-                Err(format!("Unknown command `{}`", chosen_cmd).into())
+                Err($error_ty::UnknownCommand(chosen_cmd.to_owned()))
             }
 
             fn highlight<'l>(line: &'l str) -> std::borrow::Cow<'l, str> {
