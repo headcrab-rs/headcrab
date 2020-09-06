@@ -10,11 +10,7 @@ fn main() {
 
 #[cfg(target_os = "linux")]
 mod example {
-    use std::{
-        cell::Cell,
-        path::{Path, PathBuf},
-        rc::Rc,
-    };
+    use std::path::{Path, PathBuf};
 
     use headcrab::{
         symbol::{DisassemblySource, RelocatedDwarf},
@@ -89,15 +85,13 @@ mod example {
     }
 
     pub fn main() {
-        let color = Rc::new(Cell::new(true));
-
         let mut rl = rustyline::Editor::<ReplHelper>::with_config(
             rustyline::Config::builder()
                 .auto_add_history(true)
                 .completion_type(CompletionType::List)
                 .build(),
         );
-        rl.set_helper(Some(ReplHelper::new(color.clone())));
+        rl.set_helper(Some(ReplHelper::new(true /* color */)));
 
         let mut context = Context {
             remote: None,
@@ -120,7 +114,7 @@ mod example {
                     }
                 }
                 "--no-color" => {
-                    color.set(false);
+                    rl.helper_mut().unwrap().color = false;
                     continue;
                 }
                 _ if arg.starts_with("-") => {
@@ -157,7 +151,7 @@ mod example {
                     target
                 }
                 Err(err) => {
-                    if color.get() {
+                    if rl.helper().unwrap().color {
                         println!("\x1b[91mError while launching debuggee: {}\x1b[0m", err);
                     } else {
                         println!("Error while launching debuggee: {}", err);
@@ -168,15 +162,15 @@ mod example {
         }
 
         for command in cmds.into_iter() {
-            if color.get() {
+            if rl.helper().unwrap().color {
                 println!("\x1b[96m> {}\x1b[0m", command);
             } else {
                 println!("> {}", command);
             }
-            match run_command(&mut context, &color, &command) {
+            match run_command(&mut context, rl.helper().unwrap().color, &command) {
                 Ok(()) => {}
                 Err(err) => {
-                    if color.get() {
+                    if rl.helper().unwrap().color {
                         println!("\x1b[91mError: {}\x1b[0m", err);
                     } else {
                         println!("Error: {}", err);
@@ -192,10 +186,10 @@ mod example {
                         println!("Exit");
                         return;
                     }
-                    match run_command(&mut context, &color, &command) {
+                    match run_command(&mut context, rl.helper().unwrap().color, &command) {
                         Ok(()) => {}
                         Err(err) => {
-                            if color.get() {
+                            if rl.helper().unwrap().color {
                                 println!("\x1b[91mError: {}\x1b[0m", err);
                             } else {
                                 println!("Error: {}", err);
@@ -209,7 +203,7 @@ mod example {
                     return;
                 }
                 Err(err) => {
-                    if color.get() {
+                    if rl.helper().unwrap().color {
                         println!("\x1b[91mError: {:?}\x1b[0m", err);
                     } else {
                         println!("Error: {:?}", err);
@@ -222,7 +216,7 @@ mod example {
 
     fn run_command(
         context: &mut Context,
-        color: &Cell<bool>,
+        color: bool,
         command: &str,
     ) -> Result<(), Box<dyn std::error::Error>> {
         if command == "" {
@@ -234,7 +228,7 @@ mod example {
         let command = ReplCommand::from_str(command)?;
         match command {
             ReplCommand::Help(()) => {
-                ReplCommand::print_help(std::io::stdout(), color.get()).unwrap();
+                ReplCommand::print_help(std::io::stdout(), color).unwrap();
             }
             ReplCommand::Exec(cmd) => {
                 println!("Starting program: {}", cmd.display());

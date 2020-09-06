@@ -1,9 +1,7 @@
 use std::{
     borrow::Cow,
-    cell::Cell,
     marker::PhantomData,
     path::{Path, PathBuf},
-    rc::Rc,
 };
 
 use rustyline::{
@@ -28,12 +26,12 @@ pub trait HighlightAndComplete: Sized {
 }
 
 pub struct MakeHelper<T: HighlightAndComplete> {
-    color: Rc<Cell<bool>>,
+    pub color: bool,
     _marker: PhantomData<T>,
 }
 
 impl<T: HighlightAndComplete> MakeHelper<T> {
-    pub fn new(color: Rc<Cell<bool>>) -> Self {
+    pub fn new(color: bool) -> Self {
         Self {
             color,
             _marker: PhantomData,
@@ -49,7 +47,7 @@ impl<T: HighlightAndComplete> Hinter for MakeHelper<T> {}
 
 impl<T: HighlightAndComplete> Highlighter for MakeHelper<T> {
     fn highlight<'l>(&self, line: &'l str, _pos: usize) -> Cow<'l, str> {
-        if self.color.get() {
+        if self.color {
             T::highlight(line)
         } else {
             line.into()
@@ -61,7 +59,7 @@ impl<T: HighlightAndComplete> Highlighter for MakeHelper<T> {
         prompt: &'p str,
         _default: bool,
     ) -> std::borrow::Cow<'b, str> {
-        if self.color.get() {
+        if self.color {
             format!("\x1b[90m{}\x1b[0m", prompt).into()
         } else {
             prompt.into()
@@ -69,7 +67,7 @@ impl<T: HighlightAndComplete> Highlighter for MakeHelper<T> {
     }
 
     fn highlight_char(&self, _line: &str, _pos: usize) -> bool {
-        self.color.get()
+        self.color
     }
 }
 
