@@ -29,11 +29,11 @@ fn runtime_breakpoint() -> Result<(), Box<dyn std::error::Error>> {
     let main_addr = debuginfo
         .get_symbol_address("main")
         .expect("No 'main' symbol");
-    let _breakpoint = target
+    let breakpoint = target
         .set_breakpoint(main_addr)
         .expect("Cannot set breakpoint");
 
-    //assert!(breakpoint.is_active());
+    assert!(breakpoint.is_active());
 
     // run the program
     target.unpause()?;
@@ -135,7 +135,7 @@ fn single_step() -> Result<(), Box<dyn std::error::Error>> {
     // which means gdb goes from <main> straight to <main+4>, "skipping" the 1byte `mov`
     let offsets = [0, 1, 4, 8, 11, 17];
     for offset in offsets.iter() {
-        let rip = test_utils::current_rip(&target);
+        let rip = test_utils::current_ip(&target);
         //println!("rip: {:#012x}", rip);
         assert_eq!(rip, (main_addr as u64 + offset),);
         let status = target.single_step()?;

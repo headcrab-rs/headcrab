@@ -71,7 +71,7 @@ pub fn patch_breakpoint(target: &LinuxTarget, debuginfo: &RelocatedDwarf) {
 
 #[cfg(target_os = "linux")]
 #[allow(dead_code)]
-pub fn current_rip(target: &LinuxTarget) -> u64 {
+pub fn current_ip(target: &LinuxTarget) -> u64 {
     target.read_regs().expect("could not read registers").rip
 }
 
@@ -80,3 +80,4 @@ pub fn current_rip(target: &LinuxTarget) -> u64 {
 pub fn ws_sigtrap(target: &LinuxTarget) -> nix::sys::wait::WaitStatus {
     nix::sys::wait::WaitStatus::Stopped(target.pid(), nix::sys::signal::SIGTRAP)
 }
+
