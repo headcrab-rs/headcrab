@@ -214,7 +214,6 @@ pub fn inject_clif_code(
     );
 
     let orig_regs = remote.read_regs()?;
-    println!("{:?}", orig_regs);
     let regs = libc::user_regs_struct {
         rip: code_region,
         rsp: stack_region + 0x1000,
