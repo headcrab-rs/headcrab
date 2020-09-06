@@ -163,22 +163,9 @@ pub fn compile_clif_code(
 pub fn inject_clif_code(
     remote: &LinuxTarget,
     lookup_symbol: &dyn Fn(&str) -> u64,
+    code: &str,
 ) -> Result<(), Box<dyn Error>> {
     let mut inj_ctx = InjectionContext::new(remote);
-
-    let code = r#"
-    ; data0: "Hello World from injected code!\n\0"
-    ; func0: puts
-    function u0:1() system_v {
-        gv0 = symbol colocated u1:0
-        sig0 = (i64) system_v
-        fn0 = u0:0 sig0
-
-    block0:
-        v0 = global_value.i64 gv0
-        call fn0(v0)
-        return
-    }"#;
 
     for line in code.lines() {
         let line = line.trim();

@@ -47,7 +47,7 @@ mod example {
         /// Print this help
         Help|h: (),
         /// Inject and run clif ir
-        Inject: (),
+        Inject: PathBuf,
         /// Exit
         Exit|quit|q: (),
     });
@@ -286,12 +286,14 @@ mod example {
             ReplCommand::Locals(()) => {
                 return show_locals(context);
             }
-            ReplCommand::Inject(()) => {
+            ReplCommand::Inject(file) => {
                 context.load_debuginfo_if_necessary()?;
 
-                return headcrab_inject::inject_clif_code(context.remote()?, &|sym| {
-                    context.debuginfo().get_symbol_address(sym).unwrap() as u64
-                });
+                return headcrab_inject::inject_clif_code(
+                    context.remote()?,
+                    &|sym| context.debuginfo().get_symbol_address(sym).unwrap() as u64,
+                    &std::fs::read_to_string(file)?,
+                );
             }
             ReplCommand::Exit(()) => unreachable!("Should be handled earlier"),
         }
