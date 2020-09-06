@@ -40,3 +40,5 @@ winapi = { version = "0.3.9", features = ["winuser","processthreadsapi","winbase
 [dev-dependencies]
 rustyline = "6.2.0"
 repl_tools = { path = "./repl_tools" }
+cranelift-codegen = "0.66.0"
+cranelift-reader = "0.66.0"

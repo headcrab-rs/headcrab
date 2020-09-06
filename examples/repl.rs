@@ -46,6 +46,8 @@ mod example {
         Locals: (),
         /// Print this help
         Help|h: (),
+        /// Inject and run clif ir
+        Inject: (),
         /// Exit
         Exit|quit|q: (),
     });
@@ -74,10 +76,10 @@ mod example {
         }
 
         fn load_debuginfo_if_necessary(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-            if self.debuginfo.is_none() {
+            //if self.debuginfo.is_none() {
                 let memory_maps = self.remote()?.memory_maps()?;
                 self.debuginfo = Some(RelocatedDwarf::from_maps(&memory_maps)?);
-            }
+            //}
             Ok(())
         }
 
@@ -283,6 +285,171 @@ mod example {
             }
             ReplCommand::Locals(()) => {
                 return show_locals(context);
+            }
+            ReplCommand::Inject(()) => {
+                println!("WIP");
+
+                context.load_debuginfo_if_necessary()?;
+
+                let functions = cranelift_reader::parse_functions(
+                    r#"
+                target x86_64-unknown-linux-gnu haswell
+
+                function u0:0() system_v {
+                    gv0 = symbol colocated u1:0
+                    sig0 = (i64) system_v
+                    fn0 = u0:0 sig0
+
+                block0:
+                    v0 = global_value.i64 gv0
+                    call fn0(v0)
+                    return
+                }
+                "#,
+                )
+                .unwrap();
+                assert!(functions.len() == 1);
+                println!("{}", functions[0]);
+
+                let flags_builder = cranelift_codegen::settings::builder();
+                let flags = cranelift_codegen::settings::Flags::new(flags_builder);
+                let isa = cranelift_codegen::isa::lookup("x86_64".parse().unwrap())
+                    .unwrap()
+                    .finish(flags);
+
+                #[derive(Default)]
+                struct MyRelocSink(
+                    Vec<(
+                        cranelift_codegen::binemit::CodeOffset,
+                        cranelift_codegen::binemit::Reloc,
+                        cranelift_codegen::ir::ExternalName,
+                        cranelift_codegen::binemit::Addend,
+                    )>,
+                );
+
+                impl cranelift_codegen::binemit::RelocSink for MyRelocSink {
+                    fn reloc_block(
+                        &mut self,
+                        _: cranelift_codegen::binemit::CodeOffset,
+                        _: cranelift_codegen::binemit::Reloc,
+                        _: cranelift_codegen::binemit::CodeOffset,
+                    ) {
+                        todo!()
+                    }
+                    fn reloc_external(
+                        &mut self,
+                        offset: cranelift_codegen::binemit::CodeOffset,
+                        _: cranelift_codegen::ir::SourceLoc,
+                        reloc: cranelift_codegen::binemit::Reloc,
+                        name: &cranelift_codegen::ir::ExternalName,
+                        addend: cranelift_codegen::binemit::Addend,
+                    ) {
+                        self.0.push((offset, reloc, name.clone(), addend));
+                    }
+                    fn reloc_constant(
+                        &mut self,
+                        _: cranelift_codegen::binemit::CodeOffset,
+                        _: cranelift_codegen::binemit::Reloc,
+                        _: cranelift_codegen::ir::ConstantOffset,
+                    ) {
+                        todo!()
+                    }
+                    fn reloc_jt(
+                        &mut self,
+                        _: cranelift_codegen::binemit::CodeOffset,
+                        _: cranelift_codegen::binemit::Reloc,
+                        _: cranelift_codegen::ir::entities::JumpTable,
+                    ) {
+                        todo!()
+                    }
+                }
+
+                let mut code_mem = Vec::new();
+                let mut relocs = MyRelocSink::default();
+
+                let mut ctx = cranelift_codegen::Context::new();
+                ctx.func = functions.into_iter().next().unwrap();
+                ctx.compile_and_emit(
+                    &*isa,
+                    &mut code_mem,
+                    &mut relocs,
+                    &mut cranelift_codegen::binemit::NullTrapSink {},
+                    &mut cranelift_codegen::binemit::NullStackmapSink {},
+                )
+                .unwrap();
+                println!("{}", ctx.func);
+                println!("{:?}", relocs.0);
+
+                let code_region = context.remote()?.mmap(
+                    0 as *mut _,
+                    code_mem.len(),
+                    libc::PROT_READ | libc::PROT_EXEC,
+                    libc::MAP_ANONYMOUS | libc::MAP_PRIVATE,
+                    0,
+                    0,
+                )?;
+                let rodata_region = context.remote()?.mmap(
+                    0 as *mut _,
+                    "Hello World from injected code!\n\0".len(),
+                    libc::PROT_READ,
+                    libc::MAP_ANONYMOUS | libc::MAP_PRIVATE,
+                    0,
+                    0,
+                )?;
+                let stack_region = context.remote()?.mmap(
+                    0 as *mut _,
+                    0x1000,
+                    libc::PROT_READ | libc::PROT_WRITE,
+                    libc::MAP_ANONYMOUS | libc::MAP_PRIVATE,
+                    0,
+                    0,
+                )?;
+                println!(
+                    "code: 0x{:016x} stack: 0x{:016x}",
+                    code_region, stack_region
+                );
+
+                for (offset, reloc, name, addend) in relocs.0 {
+                    let sym = match name {
+                        cranelift_codegen::ir::ExternalName::User {
+                            namespace: 0,
+                            index: 0,
+                        } => {
+                            // puts
+                            context.debuginfo().get_symbol_address("puts").unwrap() as u64
+                        }
+                        cranelift_codegen::ir::ExternalName::User {
+                            namespace: 1,
+                            index: 0,
+                        } => rodata_region,
+                        _ => todo!("{:?}", name),
+                    };
+                    match reloc {
+                        cranelift_codegen::binemit::Reloc::Abs8 => {
+                            code_mem[offset as usize..offset as usize + 8].copy_from_slice(&u64::to_ne_bytes((sym as i64 + addend) as u64));
+                        }
+                        _ => todo!("{:?}", reloc),
+                    }
+                }
+
+                context
+                    .remote()?
+                    .write()
+                    .write_slice(&code_mem, code_region as usize)
+                    .write_slice("Hello World from injected code!\n\0".as_bytes(), rodata_region as usize)
+                    .apply()?;
+
+                let orig_regs = context.remote()?.read_regs()?;
+                println!("{:?}", orig_regs);
+                let regs = libc::user_regs_struct {
+                    rip: code_region,
+                    rsp: stack_region + 0x1000,
+                    ..orig_regs
+                };
+                context.remote()?.write_regs(regs)?;
+                println!("{:?}", context.remote()?.unpause()?);
+                println!("{:016x}", context.remote()?.read_regs()?.rip);
+                context.remote()?.write_regs(orig_regs)?;
             }
             ReplCommand::Exit(()) => unreachable!("Should be handled earlier"),
         }
