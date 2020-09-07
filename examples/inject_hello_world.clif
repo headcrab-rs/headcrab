@@ -18,7 +18,6 @@ function u0:2() system_v {
 
 block0:
     call fn0()
-    debugtrap
     return
 }
 

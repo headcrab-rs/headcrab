@@ -57,18 +57,29 @@ pub struct InjectionContext<'a> {
     readwrite: Memory,
     functions: HashMap<FuncId, u64>,
     data_objects: HashMap<DataId, u64>,
+    breakpoint_trap: u64,
 }
 
 impl<'a> InjectionContext<'a> {
-    pub fn new(target: &'a LinuxTarget) -> Self {
-        Self {
+    pub fn new(target: &'a LinuxTarget) -> Result<Self, Box<dyn Error>> {
+        let mut inj_ctx = Self {
             target,
             code: Memory::new_executable(),
             readonly: Memory::new_readonly(),
             readwrite: Memory::new_writable(),
             functions: HashMap::new(),
             data_objects: HashMap::new(),
-        }
+            breakpoint_trap: 0,
+        };
+
+        inj_ctx.breakpoint_trap = inj_ctx.code.allocate(target, 1, 8)?;
+        inj_ctx
+            .target
+            .write()
+            .write(&0xcc, inj_ctx.breakpoint_trap as usize)
+            .apply()?;
+
+        Ok(inj_ctx)
     }
 
     pub fn allocate_code(&mut self, size: u64) -> Result<u64, Box<dyn Error>> {
@@ -166,7 +177,10 @@ pub fn compile_clif_code(inj_ctx: &mut InjectionContext, code: &str) -> Result<(
                     assert_eq!(namespace, 0);
                     FuncId::from_u32(index)
                 }
-                ir::ExternalName::TestCase { length: _, ascii: _ } => todo!(),
+                ir::ExternalName::TestCase {
+                    length: _,
+                    ascii: _,
+                } => todo!(),
                 ir::ExternalName::LibCall(_) => panic!("Can't define libcall"),
             },
             code_region,
@@ -192,7 +206,7 @@ pub fn inject_clif_code(
     lookup_symbol: &dyn Fn(&str) -> u64,
     code: &str,
 ) -> Result<(), Box<dyn Error>> {
-    let mut inj_ctx = InjectionContext::new(remote);
+    let mut inj_ctx = InjectionContext::new(remote)?;
     let mut run_function = None;
 
     for line in code.lines() {
@@ -259,6 +273,15 @@ pub fn inject_clif_code(
     let code_region = inj_ctx.lookup_function(run_function.expect("Missing `run` directive"));
     let stack_region = inj_ctx.allocate_readwrite(0x1000)?;
 
+    inj_ctx
+        .target
+        .write()
+        .write(
+            &(inj_ctx.breakpoint_trap as usize),
+            stack_region as usize + 0x1000 - std::mem::size_of::<usize>(),
+        )
+        .apply()?;
+
     println!(
         "code: 0x{:016x} stack: 0x{:016x}",
         code_region, stack_region
@@ -267,7 +290,7 @@ pub fn inject_clif_code(
     let orig_regs = remote.read_regs()?;
     let regs = libc::user_regs_struct {
         rip: code_region,
-        rsp: stack_region + 0x1000,
+        rsp: stack_region + 0x1000 - std::mem::size_of::<usize>() as u64,
         ..orig_regs
     };
     remote.write_regs(regs)?;
