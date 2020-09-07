@@ -93,6 +93,24 @@ impl<'a> InjectionContext<'a> {
         self.breakpoint_trap
     }
 
+    /// Allocate a new stack and return the bottom of the stack.
+    pub fn new_stack(&mut self, size: u64) -> Result<u64, Box<dyn Error>> {
+        let stack = self.allocate_readwrite(size)?;
+
+        // Ensure that we hit a breakpoint trap when returning from the injected function.
+        self
+            .target()
+            .write()
+            .write(
+                &(self.breakpoint_trap() as usize),
+                stack as usize + size as usize - std::mem::size_of::<usize>(),
+            )
+            .apply()?;
+
+        // Stack grows downwards on x86_64
+        Ok(stack + size - std::mem::size_of::<usize>() as u64)
+    }
+
     pub fn allocate_code(&mut self, size: u64) -> Result<u64, Box<dyn Error>> {
         self.code.allocate(self.target, size, 8)
     }
@@ -298,27 +316,17 @@ pub fn inject_clif_code(
     }
 
     let run_function = inj_ctx.lookup_function(run_function.expect("Missing `run` directive"));
-    let stack_region = inj_ctx.allocate_readwrite(0x1000)?;
-
-    // Ensure that we hit a breakpoint trap when returning from the injected function.
-    inj_ctx
-        .target
-        .write()
-        .write(
-            &(inj_ctx.breakpoint_trap as usize),
-            stack_region as usize + 0x1000 - std::mem::size_of::<usize>(),
-        )
-        .apply()?;
+    let stack = inj_ctx.new_stack(0x1000)?;
 
     println!(
         "run function: 0x{:016x} stack: 0x{:016x}",
-        run_function, stack_region
+        run_function, stack
     );
 
     let orig_regs = remote.read_regs()?;
     let regs = libc::user_regs_struct {
         rip: run_function,
-        rsp: stack_region + 0x1000 - std::mem::size_of::<usize>() as u64,
+        rsp: stack,
         ..orig_regs
     };
     remote.write_regs(regs)?;

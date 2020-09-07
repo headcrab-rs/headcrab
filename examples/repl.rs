@@ -352,27 +352,17 @@ mod example {
                 }
 
                 let run_function = inj_ctx.lookup_function(FuncId::from_u32(2));
-                let stack_region = inj_ctx.allocate_readwrite(0x1000)?;
+                let stack = inj_ctx.new_stack(0x1000)?;
                 println!(
                     "run function: 0x{:016x} stack: 0x{:016x}",
-                    run_function, stack_region
+                    run_function, stack
                 );
-
-                // Ensure that we hit a breakpoint trap when returning from the injected function.
-                inj_ctx
-                    .target()
-                    .write()
-                    .write(
-                        &(inj_ctx.breakpoint_trap() as usize),
-                        stack_region as usize + 0x1000 - std::mem::size_of::<usize>(),
-                    )
-                    .apply()?;
 
                 let orig_regs = inj_ctx.target().read_regs()?;
                 println!("orig rip: {:016x}", orig_regs.rip);
                 let regs = libc::user_regs_struct {
                     rip: run_function,
-                    rsp: stack_region + 0x1000 - std::mem::size_of::<usize>() as u64,
+                    rsp: stack,
                     ..orig_regs
                 };
                 inj_ctx.target().write_regs(regs)?;
