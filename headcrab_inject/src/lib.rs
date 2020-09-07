@@ -1,3 +1,6 @@
+// FIXME make this work on other systems too.
+#![cfg(all(target_arch = "x86_64", target_os = "linux"))]
+
 use std::{collections::HashMap, error::Error};
 
 use cranelift_codegen::{
