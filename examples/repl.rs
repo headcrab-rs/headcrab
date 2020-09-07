@@ -10,6 +10,7 @@ fn main() {
 
 #[cfg(target_os = "linux")]
 mod example {
+    use std::borrow::Cow;
     use std::fs::File;
     use std::io::{prelude::*, BufReader};
     use std::{
@@ -18,7 +19,7 @@ mod example {
     };
 
     use headcrab::{
-        symbol::{pretty, CrabResult, DisassemblySource, RelocatedDwarf, Snippet},
+        symbol::{CrabResult, DisassemblySource, RelocatedDwarf, Snippet},
         target::{AttachOptions, LinuxTarget, UnixTarget},
     };
 
@@ -27,6 +28,7 @@ mod example {
 
     use repl_tools::HighlightAndComplete;
     use rustyline::CompletionType;
+    use rustyline::{completion::Pair, CompletionType};
 
     repl_tools::define_repl_cmds!(enum ReplCommand {
         err = ReplCommandError;
@@ -47,7 +49,7 @@ mod example {
         /// read: List registers and their content for the current stack frame
         Registers|regs: String,
         /// Print backtrace of stack frames
-        Backtrace|bt: String,
+        Backtrace|bt: BacktraceType,
         /// Disassemble some a several instructions starting at the instruction pointer
         Disassemble|dis: (),
         /// Print all local variables of current stack frame
@@ -90,6 +92,46 @@ mod example {
                         Err(format!("Unrecognized backtrace type {}. Supported ones are 'fp' and 'naive'. Please consider using one of them.", value).into())
                     },
             }
+        }
+    }
+
+    impl Default for BacktraceType {
+        fn default() -> Self {
+            BacktraceType::FramePtr
+        }
+    }
+
+    impl HighlightAndComplete for BacktraceType {
+        type Error = VoidError;
+        fn from_str(line: &str) -> Result<Self, Self::Error> {
+            Ok(BacktraceType::from_str(line.trim()).unwrap_or_default())
+        }
+
+        fn highlight<'l>(line: &'l str) -> Cow<'l, str> {
+            line.into()
+        }
+
+        fn complete(
+            line: &str,
+            pos: usize,
+            ctx: &rustyline::Context<'_>,
+        ) -> rustyline::Result<(usize, Vec<Pair>)> {
+            let pos_first_non_whitespace = line
+                .chars()
+                .position(|c| !c.is_ascii_whitespace())
+                .unwrap_or(0);
+
+            let candidates = ["fp", "naive"]
+                .iter()
+                .filter(|&&cmd| cmd.starts_with(&line.trim_start().to_lowercase()))
+                .map(|cmd| Pair {
+                    display: String::from(*cmd),
+                    replacement: String::from(*cmd) + " ",
+                })
+                .collect::<Vec<_>>();
+
+            let _ = (line, pos, ctx);
+            return Ok((pos_first_non_whitespace, candidates));
         }
     }
 
@@ -379,10 +421,8 @@ mod example {
 
     fn show_backtrace(
         context: &mut Context,
-        sub_cmd: &str,
+        bt_type: &BacktraceType,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let bt_type = BacktraceType::from_str(sub_cmd)?;
-
         let call_stack: Vec<_> = get_call_stack(context, bt_type)?;
         for func in call_stack {
             let res = context
@@ -527,7 +567,7 @@ mod example {
 
     fn get_call_stack(
         context: &mut Context,
-        bt_type: BacktraceType,
+        bt_type: &BacktraceType,
     ) -> Result<Vec<usize>, Box<dyn std::error::Error>> {
         context.load_debuginfo_if_necessary()?;
 
@@ -542,7 +582,7 @@ mod example {
                 .apply()?;
         }
 
-        let call_stack: Vec<_> = match bt_type {
+        let call_stack: Vec<_> = match *bt_type {
             BacktraceType::FramePtr => headcrab::symbol::unwind::frame_pointer_unwinder(
                 context.debuginfo(),
                 &stack[..],
@@ -585,7 +625,7 @@ mod example {
         context: &mut Context,
         context_lines: usize,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let call_stack = get_call_stack(context, BacktraceType::FramePtr)?;
+        let call_stack = get_call_stack(context, &BacktraceType::default())?;
         let top_of_stack = call_stack[0];
         context
             .debuginfo()
@@ -616,6 +656,7 @@ mod example {
                             .unwrap_or_default();
                         Snippet::from_file(
                             file,
+                            name,
                             line as usize,
                             context_lines as usize,
                             column as usize,

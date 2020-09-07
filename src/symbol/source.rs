@@ -97,6 +97,8 @@ struct SourceLine {
 pub struct Snippet {
     /// The full path to the file, whose snippet we capture.
     file_path: String,
+    /// The name of the function containing the breakpoint.
+    fn_name: String,
     /// The lines from the source file that is part of the snippet. Lines are a tuple of line
     /// number and the line string
     lines: Vec<SourceLine>,
@@ -112,6 +114,7 @@ impl Snippet {
     /// surrounding line count as context.
     pub fn from_file(
         file_path: &str,
+        fn_name: String,
         line_no: usize,
         lines_as_context: usize,
         column: usize,
@@ -147,6 +150,7 @@ impl Snippet {
         }
         Ok(Snippet {
             file_path: file_path.to_string(),
+            fn_name,
             lines,
             key_line_idx: lines_as_context,
             key_column_idx: column - 1,
@@ -178,6 +182,11 @@ pub mod pretty {
                     .to_owned(),
                 t,
             );
+            eprintln!(
+                "\x1b[96m{}::\x1b[37m{}()\x1b[0m\n",
+                self.file_path, self.fn_name
+            );
+
             for (idx, SourceLine { line_no, line_str }) in self.lines.iter().enumerate() {
                 let (line_marker, step) = if idx == self.key_line_idx {
                     ("\x1b[91m>\x1b[0m", &step_lo)
