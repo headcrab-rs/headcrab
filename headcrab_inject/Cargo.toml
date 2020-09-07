@@ -1,6 +1,6 @@
 [package]
 name = "headcrab_inject"
-version = "0.1.0"
+version = "0.2.0"
 authors = ["Headcrab Contributors"]
 edition = "2018"
 description = "A code injection plugin for Headcrab."
