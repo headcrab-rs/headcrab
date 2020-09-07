@@ -5,7 +5,7 @@ use cranelift_codegen::{
     isa::{self, TargetIsa},
     settings::{self, Configurable},
 };
-use headcrab::target::{LinuxTarget, UnixTarget};
+use headcrab::target::LinuxTarget;
 
 mod memory;
 
@@ -98,8 +98,7 @@ impl<'a> InjectionContext<'a> {
         let stack = self.allocate_readwrite(size)?;
 
         // Ensure that we hit a breakpoint trap when returning from the injected function.
-        self
-            .target()
+        self.target()
             .write()
             .write(
                 &(self.breakpoint_trap() as usize),
@@ -240,11 +239,10 @@ fn parse_func_or_data(s: &str) -> FuncOrDataId {
 }
 
 pub fn inject_clif_code(
-    remote: &LinuxTarget,
+    inj_ctx: &mut InjectionContext,
     lookup_symbol: &dyn Fn(&str) -> u64,
     code: &str,
-) -> Result<(), Box<dyn Error>> {
-    let mut inj_ctx = InjectionContext::new(remote)?;
+) -> Result<u64, Box<dyn Error>> {
     let mut run_function = None;
 
     for line in code.lines() {
@@ -312,27 +310,10 @@ pub fn inject_clif_code(
     for func in functions {
         ctx.clear();
         ctx.func = func;
-        compile_clif_code(&mut inj_ctx, &*isa, &mut ctx)?;
+        compile_clif_code(inj_ctx, &*isa, &mut ctx)?;
     }
 
     let run_function = inj_ctx.lookup_function(run_function.expect("Missing `run` directive"));
-    let stack = inj_ctx.new_stack(0x1000)?;
 
-    println!(
-        "run function: 0x{:016x} stack: 0x{:016x}",
-        run_function, stack
-    );
-
-    let orig_regs = remote.read_regs()?;
-    let regs = libc::user_regs_struct {
-        rip: run_function,
-        rsp: stack,
-        ..orig_regs
-    };
-    remote.write_regs(regs)?;
-    println!("{:?}", remote.unpause()?);
-    println!("{:016x}", remote.read_regs()?.rip);
-    remote.write_regs(orig_regs)?;
-
-    Ok(())
+    Ok(run_function)
 }

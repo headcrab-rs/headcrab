@@ -20,7 +20,7 @@ mod example {
         target::{AttachOptions, LinuxTarget, UnixTarget},
     };
 
-    use headcrab_inject::{compile_clif_code, FuncId, InjectionContext, DataId};
+    use headcrab_inject::{compile_clif_code, DataId, FuncId, InjectionContext};
     use repl_tools::HighlightAndComplete;
     use rustyline::CompletionType;
 
@@ -295,11 +295,30 @@ mod example {
             ReplCommand::Inject(file) => {
                 context.load_debuginfo_if_necessary()?;
 
-                return headcrab_inject::inject_clif_code(
-                    context.remote()?,
+                let mut inj_ctx = InjectionContext::new(context.remote()?)?;
+                let run_function = headcrab_inject::inject_clif_code(
+                    &mut inj_ctx,
                     &|sym| context.debuginfo().get_symbol_address(sym).unwrap() as u64,
                     &std::fs::read_to_string(file)?,
+                )?;
+
+                let stack = inj_ctx.new_stack(0x1000)?;
+
+                println!(
+                    "run function: 0x{:016x} stack: 0x{:016x}",
+                    run_function, stack
                 );
+
+                let orig_regs = inj_ctx.target().read_regs()?;
+                let regs = libc::user_regs_struct {
+                    rip: run_function,
+                    rsp: stack,
+                    ..orig_regs
+                };
+                inj_ctx.target().write_regs(regs)?;
+                let status = inj_ctx.target().unpause()?;
+                println!("{:?} at 0x{:016x}", status, inj_ctx.target().read_regs()?.rip);
+                inj_ctx.target().write_regs(orig_regs)?;
             }
             ReplCommand::InjectLib(file) => {
                 context.load_debuginfo_if_necessary()?;
@@ -318,7 +337,8 @@ mod example {
                 file.push(0);
                 inj_ctx.define_data_object_with_bytes(DataId::from_u32(0), &file)?;
 
-                inj_ctx.define_data_object_with_bytes(DataId::from_u32(1), b"__headcrab_command\0")?;
+                inj_ctx
+                    .define_data_object_with_bytes(DataId::from_u32(1), b"__headcrab_command\0")?;
 
                 let isa = headcrab_inject::target_isa();
 
@@ -366,8 +386,8 @@ mod example {
                     ..orig_regs
                 };
                 inj_ctx.target().write_regs(regs)?;
-                println!("{:?}", inj_ctx.target().unpause()?);
-                println!("{:016x}", inj_ctx.target().read_regs()?.rip);
+                let status = inj_ctx.target().unpause()?;
+                println!("{:?} at 0x{:016x}", status, inj_ctx.target().read_regs()?.rip);
                 inj_ctx.target().write_regs(orig_regs)?;
             }
             ReplCommand::Exit(()) => unreachable!("Should be handled earlier"),

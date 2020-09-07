@@ -1,5 +1,5 @@
 ; declare: func0 puts
-; define: data0 "Hello World from injected code!\n\0"
+; define: data0 "Hello World from injected code!\0"
 
 function u0:1() system_v {
     gv0 = symbol u1:0
