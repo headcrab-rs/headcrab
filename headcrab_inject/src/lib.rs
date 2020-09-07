@@ -4,7 +4,7 @@ use cranelift_codegen::{
     binemit, ir, isa,
     settings::{self, Configurable},
 };
-use cranelift_module::{DataId, FuncId};
+use cranelift_module::{DataId, FuncId, FuncOrDataId};
 use headcrab::target::{LinuxTarget, UnixTarget};
 
 mod memory;
@@ -100,13 +100,7 @@ impl<'a> InjectionContext<'a> {
     }
 }
 
-pub fn compile_clif_code(
-    inj_ctx: &mut InjectionContext,
-    code: &str,
-) -> Result<u64, Box<dyn Error>> {
-    let functions = cranelift_reader::parse_functions(code).unwrap();
-    assert!(functions.len() == 1);
-
+pub fn compile_clif_code(inj_ctx: &mut InjectionContext, code: &str) -> Result<(), Box<dyn Error>> {
     let mut flag_builder = settings::builder();
     flag_builder.set("use_colocated_libcalls", "false").unwrap();
     let flags = settings::Flags::new(flag_builder);
@@ -114,50 +108,83 @@ pub fn compile_clif_code(
         .unwrap()
         .finish(flags);
 
+    let functions = cranelift_reader::parse_functions(code).unwrap();
+
     let mut code_mem = Vec::new();
     let mut relocs = VecRelocSink::default();
 
     let mut ctx = cranelift_codegen::Context::new();
-    ctx.func = functions.into_iter().next().unwrap();
-    ctx.compile_and_emit(
-        &*isa,
-        &mut code_mem,
-        &mut relocs,
-        &mut binemit::NullTrapSink {},
-        &mut binemit::NullStackmapSink {},
-    )
-    .unwrap();
 
-    let code_region = inj_ctx.allocate_code(code_mem.len() as u64)?;
+    for func in functions {
+        code_mem.clear();
+        relocs.0.clear();
 
-    for reloc_entry in relocs.0 {
-        let sym = match reloc_entry.name {
-            ir::ExternalName::User {
-                namespace: 0,
-                index,
-            } => inj_ctx.lookup_function(FuncId::from_u32(index)),
-            ir::ExternalName::User {
-                namespace: 1,
-                index,
-            } => inj_ctx.lookup_data_object(DataId::from_u32(index)),
-            _ => todo!("{:?}", reloc_entry.name),
-        };
-        match reloc_entry.reloc {
-            binemit::Reloc::Abs8 => {
-                code_mem[reloc_entry.offset as usize..reloc_entry.offset as usize + 8]
-                    .copy_from_slice(&u64::to_ne_bytes((sym as i64 + reloc_entry.addend) as u64));
+        ctx.func = func;
+        ctx.compile_and_emit(
+            &*isa,
+            &mut code_mem,
+            &mut relocs,
+            &mut binemit::NullTrapSink {},
+            &mut binemit::NullStackmapSink {},
+        )
+        .unwrap();
+
+        let code_region = inj_ctx.allocate_code(code_mem.len() as u64)?;
+
+        for reloc_entry in relocs.0.drain(..) {
+            let sym = match reloc_entry.name {
+                ir::ExternalName::User {
+                    namespace: 0,
+                    index,
+                } => inj_ctx.lookup_function(FuncId::from_u32(index)),
+                ir::ExternalName::User {
+                    namespace: 1,
+                    index,
+                } => inj_ctx.lookup_data_object(DataId::from_u32(index)),
+                _ => todo!("{:?}", reloc_entry.name),
+            };
+            match reloc_entry.reloc {
+                binemit::Reloc::Abs8 => {
+                    code_mem[reloc_entry.offset as usize..reloc_entry.offset as usize + 8]
+                        .copy_from_slice(&u64::to_ne_bytes(
+                            (sym as i64 + reloc_entry.addend) as u64,
+                        ));
+                }
+                _ => todo!("reloc kind for {:?}", reloc_entry),
             }
-            _ => todo!("reloc kind for {:?}", reloc_entry),
         }
+
+        inj_ctx
+            .target
+            .write()
+            .write_slice(&code_mem, code_region as usize)
+            .apply()?;
+
+        inj_ctx.define_function(
+            match ctx.func.name {
+                ir::ExternalName::User { namespace, index } => {
+                    assert_eq!(namespace, 0);
+                    FuncId::from_u32(index)
+                }
+                ir::ExternalName::TestCase { length: _, ascii: _ } => todo!(),
+                ir::ExternalName::LibCall(_) => panic!("Can't define libcall"),
+            },
+            code_region,
+        );
     }
 
-    inj_ctx
-        .target
-        .write()
-        .write_slice(&code_mem, code_region as usize)
-        .apply()?;
+    Ok(())
+}
 
-    Ok(code_region)
+fn parse_func_or_data(s: &str) -> FuncOrDataId {
+    let (kind, index) = s.split_at(4);
+    let index: u32 = index.parse().unwrap();
+
+    match kind {
+        "func" => FuncOrDataId::Func(FuncId::from_u32(index)),
+        "data" => FuncOrDataId::Data(DataId::from_u32(index)),
+        _ => panic!("`Unknown kind {}`", kind),
+    }
 }
 
 pub fn inject_clif_code(
@@ -166,6 +193,7 @@ pub fn inject_clif_code(
     code: &str,
 ) -> Result<(), Box<dyn Error>> {
     let mut inj_ctx = InjectionContext::new(remote);
+    let mut run_function = None;
 
     for line in code.lines() {
         let line = line.trim();
@@ -176,36 +204,59 @@ pub fn inject_clif_code(
         let (directive, content) = line.split_at(line.find(':').unwrap_or(line.len()));
         let content = content[1..].trim_start();
 
-        let (kind, index) = directive.split_at(4);
-        let index: u32 = index.parse().unwrap();
-
-        match kind {
-            "data" => {
-                if content.starts_with('"') {
-                    let content = content
-                        .trim_matches('"')
-                        .replace("\\n", "\n")
-                        .replace("\\0", "\0");
-                    let data_region = inj_ctx.allocate_readonly(content.len() as u64)?;
-                    inj_ctx
-                        .target
-                        .write()
-                        .write_slice(content.as_bytes(), data_region as usize)
-                        .apply()?;
-                    inj_ctx.define_data_object(DataId::from_u32(index), data_region);
-                } else {
-                    todo!();
+        match directive {
+            "declare" => {
+                let (id, content) = content.split_at(content.find(" ").unwrap_or(content.len()));
+                let content = content.trim_start();
+                match parse_func_or_data(id) {
+                    FuncOrDataId::Func(func_id) => {
+                        inj_ctx.define_function(func_id, lookup_symbol(content));
+                    }
+                    FuncOrDataId::Data(data_id) => {
+                        inj_ctx.define_data_object(data_id, lookup_symbol(content));
+                    }
                 }
             }
-            "func" => {
-                inj_ctx.define_function(FuncId::from_u32(index), lookup_symbol(content));
+            "define" => {
+                let (id, content) = content.split_at(content.find(" ").unwrap_or(content.len()));
+                let content = content.trim_start();
+                match parse_func_or_data(id) {
+                    FuncOrDataId::Data(data_id) => {
+                        if content.starts_with('"') {
+                            let content = content
+                                .trim_matches('"')
+                                .replace("\\n", "\n")
+                                .replace("\\0", "\0");
+                            let data_region = inj_ctx.allocate_readonly(content.len() as u64)?;
+                            inj_ctx
+                                .target
+                                .write()
+                                .write_slice(content.as_bytes(), data_region as usize)
+                                .apply()?;
+                            inj_ctx.define_data_object(data_id, data_region);
+                        } else {
+                            todo!();
+                        }
+                    }
+                    FuncOrDataId::Func(func_id) => {
+                        panic!("Please use `function u0:{}()` instead", func_id.as_u32());
+                    }
+                }
+            }
+            "run" => {
+                assert!(run_function.is_none());
+                match parse_func_or_data(content) {
+                    FuncOrDataId::Func(func_id) => run_function = Some(func_id),
+                    FuncOrDataId::Data(_) => panic!("Can't execute data object"),
+                }
             }
             _ => panic!("Unknown directive `{}`", directive),
         }
     }
 
-    let code_region = compile_clif_code(&mut inj_ctx, code)?;
+    compile_clif_code(&mut inj_ctx, code)?;
 
+    let code_region = inj_ctx.lookup_function(run_function.expect("Missing `run` directive"));
     let stack_region = inj_ctx.allocate_readwrite(0x1000)?;
 
     println!(

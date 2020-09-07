@@ -1,5 +1,6 @@
-; data0: "Hello World from injected code!\n\0"
-; func0: puts
+; declare: func0 puts
+; define: data0 "Hello World from injected code!\n\0"
+
 function u0:1() system_v {
     gv0 = symbol colocated u1:0
     sig0 = (i64) system_v
@@ -10,3 +11,15 @@ block0:
     call fn0(v0)
     return
 }
+
+function u0:2() system_v {
+    sig0 = () system_v
+    fn0 = u0:1 sig0
+
+block0:
+    call fn0()
+    debugtrap
+    return
+}
+
+; run: func2
