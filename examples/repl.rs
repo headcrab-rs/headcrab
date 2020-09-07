@@ -82,10 +82,9 @@ mod example {
         }
 
         fn load_debuginfo_if_necessary(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-            //if self.debuginfo.is_none() {
+            // FIXME only reload debuginfo when necessary (memory map changed)
             let memory_maps = self.remote()?.memory_maps()?;
             self.debuginfo = Some(RelocatedDwarf::from_maps(&memory_maps)?);
-            //}
             Ok(())
         }
 
