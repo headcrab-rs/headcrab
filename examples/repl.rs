@@ -19,7 +19,7 @@ mod example {
     };
 
     use headcrab::{
-        symbol::{CrabResult, DisassemblySource, RelocatedDwarf, Snippet},
+        symbol::{DisassemblySource, RelocatedDwarf, Snippet},
         target::{AttachOptions, LinuxTarget, UnixTarget},
     };
 
@@ -83,14 +83,23 @@ mod example {
         Naive,
     }
 
+    #[derive(Debug)]
+    struct BacktraceTypeError(String);
+
+    impl std::fmt::Display for BacktraceTypeError {
+        fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            write!(f, "Unrecognized backtrace type {}. Supported ones are 'fp' and 'naive'. Please consider using one of them.", self.0.trim())
+        }
+    }
+    impl std::error::Error for BacktraceTypeError {}
+
     impl BacktraceType {
-        fn from_str(value: &str) -> CrabResult<Self> {
+        #[inline]
+        fn from_str(value: &str) -> Result<Self, BacktraceTypeError> {
             match value {
                 "fp" | "" => Ok(BacktraceType::FramePtr),
                 "naive" => Ok(BacktraceType::Naive),
-                _ => {
-                        Err(format!("Unrecognized backtrace type {}. Supported ones are 'fp' and 'naive'. Please consider using one of them.", value).into())
-                    },
+                _ => Err(BacktraceTypeError(value.to_owned()).into()),
             }
         }
     }
@@ -102,9 +111,9 @@ mod example {
     }
 
     impl HighlightAndComplete for BacktraceType {
-        type Error = VoidError;
+        type Error = BacktraceTypeError;
         fn from_str(line: &str) -> Result<Self, Self::Error> {
-            Ok(BacktraceType::from_str(line.trim()).unwrap_or_default())
+            BacktraceType::from_str(line.trim())
         }
 
         fn highlight<'l>(line: &'l str) -> Cow<'l, str> {
