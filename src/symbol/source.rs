@@ -162,12 +162,15 @@ pub mod pretty {
     };
 
     lazy_static::lazy_static! {
-        static ref SYNTAX_SET: SyntaxSet = SyntaxSet::load_defaults_nonewlines();
+        static ref SYNTAX_SET: SyntaxSet = SyntaxSet::load_defaults_newlines();
         static ref THEME_SET: ThemeSet = ThemeSet::load_defaults();
     }
     impl Snippet {
+        /// Syntax highlight the snippet and print it.
         pub fn highlight(&self) {
             let t = &THEME_SET.themes["Solarized (dark)"];
+            let step_hi = 6;
+            let step_lo = 2;
             let mut h = HighlightLines::new(
                 &SYNTAX_SET
                     .find_syntax_by_extension("rs")
@@ -176,17 +179,17 @@ pub mod pretty {
                 t,
             );
             for (idx, SourceLine { line_no, line_str }) in self.lines.iter().enumerate() {
-                let line_marker = if idx == self.key_line_idx {
-                    "\x1b[91m>\x1b[0m"
+                let (line_marker, step) = if idx == self.key_line_idx {
+                    ("\x1b[91m>\x1b[0m", &step_lo)
                 } else {
-                    " \x1b[2m"
+                    (" \x1b[2m", &step_hi)
                 };
                 let hl_line = h.highlight(line_str, &SYNTAX_SET);
                 eprintln!(
                     "{} {:>6} | {}",
                     line_marker,
                     *line_no,
-                    as_16_bit_terminal_escaped(&hl_line[..])
+                    as_16_bit_terminal_escaped(&hl_line[..], step)
                 );
                 if idx == self.key_line_idx && self.key_column_idx != 0 {
                     eprintln!(
@@ -199,17 +202,20 @@ pub mod pretty {
         }
     }
 
-    fn as_16_bit_terminal_escaped(v: &[(Style, &str)]) -> String {
+    fn as_16_bit_terminal_escaped(v: &[(Style, &str)], step: &u8) -> String {
         use std::fmt::Write;
         let mut s: String = String::new();
+        let factor = 256 / *step as u16;
+        let factor_u8 = factor as u8;
+        let step_squared = *step * *step;
         for &(ref style, text) in v.iter() {
             // 256/6 = 42
             write!(
                 s,
                 "\x1b[38;5;{}m{}",
-                16u8 + 36 * (style.foreground.r / 42)
-                    + 6 * (style.foreground.g / 42)
-                    + (style.foreground.b / 42),
+                16u8 + step_squared * (style.foreground.r / factor_u8)
+                    + *step as u8 * (style.foreground.g / factor_u8)
+                    + (style.foreground.b / factor_u8),
                 text
             )
             .unwrap();
