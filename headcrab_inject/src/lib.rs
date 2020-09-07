@@ -84,6 +84,10 @@ impl<'a> InjectionContext<'a> {
         Ok(inj_ctx)
     }
 
+    pub fn target(&self) -> &LinuxTarget {
+        self.target
+    }
+
     pub fn allocate_code(&mut self, size: u64) -> Result<u64, Box<dyn Error>> {
         self.code.allocate(self.target, size, 8)
     }
