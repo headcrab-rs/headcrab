@@ -293,102 +293,10 @@ mod example {
                 return show_locals(context);
             }
             ReplCommand::Inject(file) => {
-                context.load_debuginfo_if_necessary()?;
-
-                let mut inj_ctx = InjectionContext::new(context.remote()?)?;
-                let run_function = headcrab_inject::inject_clif_code(
-                    &mut inj_ctx,
-                    &|sym| context.debuginfo().get_symbol_address(sym).unwrap() as u64,
-                    &std::fs::read_to_string(file)?,
-                )?;
-
-                let stack = inj_ctx.new_stack(0x1000)?;
-
-                println!(
-                    "run function: 0x{:016x} stack: 0x{:016x}",
-                    run_function, stack
-                );
-
-                let orig_regs = inj_ctx.target().read_regs()?;
-                let regs = libc::user_regs_struct {
-                    rip: run_function,
-                    rsp: stack,
-                    ..orig_regs
-                };
-                inj_ctx.target().write_regs(regs)?;
-                let status = inj_ctx.target().unpause()?;
-                println!("{:?} at 0x{:016x}", status, inj_ctx.target().read_regs()?.rip);
-                inj_ctx.target().write_regs(orig_regs)?;
+                return inject(context, file);
             }
             ReplCommand::InjectLib(file) => {
-                context.load_debuginfo_if_necessary()?;
-
-                let mut inj_ctx = InjectionContext::new(context.remote()?)?;
-                inj_ctx.define_function(
-                    FuncId::from_u32(0),
-                    context.debuginfo().get_symbol_address("dlopen").unwrap() as u64,
-                );
-                inj_ctx.define_function(
-                    FuncId::from_u32(1),
-                    context.debuginfo().get_symbol_address("dlsym").unwrap() as u64,
-                );
-
-                let mut file = file.canonicalize()?.as_os_str().as_bytes().to_owned();
-                file.push(0);
-                inj_ctx.define_data_object_with_bytes(DataId::from_u32(0), &file)?;
-
-                inj_ctx
-                    .define_data_object_with_bytes(DataId::from_u32(1), b"__headcrab_command\0")?;
-
-                let isa = headcrab_inject::target_isa();
-
-                let functions = headcrab_inject::parse_functions(
-                    r#"
-        function u0:2() system_v {
-            gv0 = symbol u1:0 ; dylib file name
-            gv1 = symbol u1:1 ; __headcrab_command
-            sig0 = (i64, i32) -> i64 system_v ; fn(filename: *const c_char, flag: c_int) -> *mut c_void
-            sig1 = (i64, i64) -> i64 system_v ; fn(handle: *mut c_void, symbol: *const c_char) -> *mut c_void
-            sig2 = () system_v ; signature for __headcrab_command
-            fn0 = u0:0 sig0 ; dlopen
-            fn1 = u0:1 sig1 ; dlsym
-
-        block0:
-            v0 = global_value.i64 gv0
-            v1 = iconst.i32 0x2 ; RTLD_NOW
-            v2 = call fn0(v0, v1)
-            v3 = global_value.i64 gv1
-            v4 = call fn1(v2, v3)
-            call_indirect sig2, v4()
-            return
-        }"#,
-                )
-                .unwrap();
-                let mut ctx = headcrab_inject::Context::new();
-                for func in functions {
-                    ctx.clear();
-                    ctx.func = func;
-                    compile_clif_code(&mut inj_ctx, &*isa, &mut ctx)?;
-                }
-
-                let run_function = inj_ctx.lookup_function(FuncId::from_u32(2));
-                let stack = inj_ctx.new_stack(0x1000)?;
-                println!(
-                    "run function: 0x{:016x} stack: 0x{:016x}",
-                    run_function, stack
-                );
-
-                let orig_regs = inj_ctx.target().read_regs()?;
-                println!("orig rip: {:016x}", orig_regs.rip);
-                let regs = libc::user_regs_struct {
-                    rip: run_function,
-                    rsp: stack,
-                    ..orig_regs
-                };
-                inj_ctx.target().write_regs(regs)?;
-                let status = inj_ctx.target().unpause()?;
-                println!("{:?} at 0x{:016x}", status, inj_ctx.target().read_regs()?.rip);
-                inj_ctx.target().write_regs(orig_regs)?;
+                return inject_lib(context, file);
             }
             ReplCommand::Exit(()) => unreachable!("Should be handled earlier"),
         }
@@ -705,6 +613,117 @@ mod example {
             local.name()?.unwrap_or("<no name>"),
             value
         );
+
+        Ok(())
+    }
+
+    fn inject(context: &mut Context, file: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+        context.load_debuginfo_if_necessary()?;
+
+        let mut inj_ctx = InjectionContext::new(context.remote()?)?;
+        let run_function = headcrab_inject::inject_clif_code(
+            &mut inj_ctx,
+            &|sym| context.debuginfo().get_symbol_address(sym).unwrap() as u64,
+            &std::fs::read_to_string(file)?,
+        )?;
+
+        let stack = inj_ctx.new_stack(0x1000)?;
+
+        println!(
+            "run function: 0x{:016x} stack: 0x{:016x}",
+            run_function, stack
+        );
+
+        let orig_regs = inj_ctx.target().read_regs()?;
+        let regs = libc::user_regs_struct {
+            rip: run_function,
+            rsp: stack,
+            ..orig_regs
+        };
+        inj_ctx.target().write_regs(regs)?;
+        let status = inj_ctx.target().unpause()?;
+        println!(
+            "{:?} at 0x{:016x}",
+            status,
+            inj_ctx.target().read_regs()?.rip
+        );
+        inj_ctx.target().write_regs(orig_regs)?;
+
+        Ok(())
+    }
+
+    fn inject_lib(context: &mut Context, file: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+        context.load_debuginfo_if_necessary()?;
+
+        let mut inj_ctx = InjectionContext::new(context.remote()?)?;
+        inj_ctx.define_function(
+            FuncId::from_u32(0),
+            context.debuginfo().get_symbol_address("dlopen").unwrap() as u64,
+        );
+        inj_ctx.define_function(
+            FuncId::from_u32(1),
+            context.debuginfo().get_symbol_address("dlsym").unwrap() as u64,
+        );
+
+        let mut file = file.canonicalize()?.as_os_str().as_bytes().to_owned();
+        file.push(0);
+        inj_ctx.define_data_object_with_bytes(DataId::from_u32(0), &file)?;
+
+        inj_ctx.define_data_object_with_bytes(DataId::from_u32(1), b"__headcrab_command\0")?;
+
+        let isa = headcrab_inject::target_isa();
+
+        let functions = headcrab_inject::parse_functions(
+                    r#"
+        function u0:2() system_v {
+            gv0 = symbol u1:0 ; dylib file name
+            gv1 = symbol u1:1 ; __headcrab_command
+            sig0 = (i64, i32) -> i64 system_v ; fn(filename: *const c_char, flag: c_int) -> *mut c_void
+            sig1 = (i64, i64) -> i64 system_v ; fn(handle: *mut c_void, symbol: *const c_char) -> *mut c_void
+            sig2 = () system_v ; signature for __headcrab_command
+            fn0 = u0:0 sig0 ; dlopen
+            fn1 = u0:1 sig1 ; dlsym
+
+        block0:
+            v0 = global_value.i64 gv0
+            v1 = iconst.i32 0x2 ; RTLD_NOW
+            v2 = call fn0(v0, v1)
+            v3 = global_value.i64 gv1
+            v4 = call fn1(v2, v3)
+            call_indirect sig2, v4()
+            return
+        }"#,
+                )
+                .unwrap();
+        let mut ctx = headcrab_inject::Context::new();
+        for func in functions {
+            ctx.clear();
+            ctx.func = func;
+            compile_clif_code(&mut inj_ctx, &*isa, &mut ctx)?;
+        }
+
+        let run_function = inj_ctx.lookup_function(FuncId::from_u32(2));
+        let stack = inj_ctx.new_stack(0x1000)?;
+        println!(
+            "run function: 0x{:016x} stack: 0x{:016x}",
+            run_function, stack
+        );
+
+        let orig_regs = inj_ctx.target().read_regs()?;
+        println!("orig rip: {:016x}", orig_regs.rip);
+        let regs = libc::user_regs_struct {
+            rip: run_function,
+            rsp: stack,
+            ..orig_regs
+        };
+        inj_ctx.target().write_regs(regs)?;
+        let status = inj_ctx.target().unpause()?;
+        println!(
+            "{:?} at 0x{:016x}",
+            status,
+            inj_ctx.target().read_regs()?.rip
+        );
+        inj_ctx.target().write_regs(orig_regs)?;
 
         Ok(())
     }
