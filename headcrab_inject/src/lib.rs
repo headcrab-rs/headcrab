@@ -1,8 +1,10 @@
 use std::{collections::HashMap, error::Error};
 
 use cranelift_codegen::{
-    binemit, ir, isa,
+    binemit, ir,
+    isa::{self, TargetIsa},
     settings::{self, Configurable},
+    Context,
 };
 use cranelift_module::{DataId, FuncId, FuncOrDataId};
 use headcrab::target::{LinuxTarget, UnixTarget};
@@ -111,81 +113,66 @@ impl<'a> InjectionContext<'a> {
     }
 }
 
-pub fn compile_clif_code(inj_ctx: &mut InjectionContext, code: &str) -> Result<(), Box<dyn Error>> {
-    let mut flag_builder = settings::builder();
-    flag_builder.set("use_colocated_libcalls", "false").unwrap();
-    let flags = settings::Flags::new(flag_builder);
-    let isa = isa::lookup("x86_64".parse().unwrap())
-        .unwrap()
-        .finish(flags);
-
-    let functions = cranelift_reader::parse_functions(code).unwrap();
-
+pub fn compile_clif_code(
+    inj_ctx: &mut InjectionContext,
+    isa: &dyn TargetIsa,
+    ctx: &mut Context,
+) -> Result<(), Box<dyn Error>> {
     let mut code_mem = Vec::new();
     let mut relocs = VecRelocSink::default();
 
-    let mut ctx = cranelift_codegen::Context::new();
+    ctx.compile_and_emit(
+        isa,
+        &mut code_mem,
+        &mut relocs,
+        &mut binemit::NullTrapSink {},
+        &mut binemit::NullStackmapSink {},
+    )
+    .unwrap();
 
-    for func in functions {
-        code_mem.clear();
-        relocs.0.clear();
+    let code_region = inj_ctx.allocate_code(code_mem.len() as u64)?;
 
-        ctx.func = func;
-        ctx.compile_and_emit(
-            &*isa,
-            &mut code_mem,
-            &mut relocs,
-            &mut binemit::NullTrapSink {},
-            &mut binemit::NullStackmapSink {},
-        )
-        .unwrap();
-
-        let code_region = inj_ctx.allocate_code(code_mem.len() as u64)?;
-
-        for reloc_entry in relocs.0.drain(..) {
-            let sym = match reloc_entry.name {
-                ir::ExternalName::User {
-                    namespace: 0,
-                    index,
-                } => inj_ctx.lookup_function(FuncId::from_u32(index)),
-                ir::ExternalName::User {
-                    namespace: 1,
-                    index,
-                } => inj_ctx.lookup_data_object(DataId::from_u32(index)),
-                _ => todo!("{:?}", reloc_entry.name),
-            };
-            match reloc_entry.reloc {
-                binemit::Reloc::Abs8 => {
-                    code_mem[reloc_entry.offset as usize..reloc_entry.offset as usize + 8]
-                        .copy_from_slice(&u64::to_ne_bytes(
-                            (sym as i64 + reloc_entry.addend) as u64,
-                        ));
-                }
-                _ => todo!("reloc kind for {:?}", reloc_entry),
+    for reloc_entry in relocs.0.drain(..) {
+        let sym = match reloc_entry.name {
+            ir::ExternalName::User {
+                namespace: 0,
+                index,
+            } => inj_ctx.lookup_function(FuncId::from_u32(index)),
+            ir::ExternalName::User {
+                namespace: 1,
+                index,
+            } => inj_ctx.lookup_data_object(DataId::from_u32(index)),
+            _ => todo!("{:?}", reloc_entry.name),
+        };
+        match reloc_entry.reloc {
+            binemit::Reloc::Abs8 => {
+                code_mem[reloc_entry.offset as usize..reloc_entry.offset as usize + 8]
+                    .copy_from_slice(&u64::to_ne_bytes((sym as i64 + reloc_entry.addend) as u64));
             }
+            _ => todo!("reloc kind for {:?}", reloc_entry),
         }
-
-        inj_ctx
-            .target
-            .write()
-            .write_slice(&code_mem, code_region as usize)
-            .apply()?;
-
-        inj_ctx.define_function(
-            match ctx.func.name {
-                ir::ExternalName::User { namespace, index } => {
-                    assert_eq!(namespace, 0);
-                    FuncId::from_u32(index)
-                }
-                ir::ExternalName::TestCase {
-                    length: _,
-                    ascii: _,
-                } => todo!(),
-                ir::ExternalName::LibCall(_) => panic!("Can't define libcall"),
-            },
-            code_region,
-        );
     }
+
+    inj_ctx
+        .target
+        .write()
+        .write_slice(&code_mem, code_region as usize)
+        .apply()?;
+
+    inj_ctx.define_function(
+        match ctx.func.name {
+            ir::ExternalName::User { namespace, index } => {
+                assert_eq!(namespace, 0);
+                FuncId::from_u32(index)
+            }
+            ir::ExternalName::TestCase {
+                length: _,
+                ascii: _,
+            } => todo!(),
+            ir::ExternalName::LibCall(_) => panic!("Can't define libcall"),
+        },
+        code_region,
+    );
 
     Ok(())
 }
@@ -268,11 +255,25 @@ pub fn inject_clif_code(
         }
     }
 
-    compile_clif_code(&mut inj_ctx, code)?;
+    let mut flag_builder = settings::builder();
+    flag_builder.set("use_colocated_libcalls", "false").unwrap();
+    let flags = settings::Flags::new(flag_builder);
+    let isa = isa::lookup("x86_64".parse().unwrap())
+        .unwrap()
+        .finish(flags);
 
-    let code_region = inj_ctx.lookup_function(run_function.expect("Missing `run` directive"));
+    let functions = cranelift_reader::parse_functions(code).unwrap();
+    let mut ctx = cranelift_codegen::Context::new();
+    for func in functions {
+        ctx.clear();
+        ctx.func = func;
+        compile_clif_code(&mut inj_ctx, &*isa, &mut ctx)?;
+    }
+
+    let run_function = inj_ctx.lookup_function(run_function.expect("Missing `run` directive"));
     let stack_region = inj_ctx.allocate_readwrite(0x1000)?;
 
+    // Ensure that we hit a breakpoint trap when returning from the injected function.
     inj_ctx
         .target
         .write()
@@ -283,13 +284,13 @@ pub fn inject_clif_code(
         .apply()?;
 
     println!(
-        "code: 0x{:016x} stack: 0x{:016x}",
-        code_region, stack_region
+        "run function: 0x{:016x} stack: 0x{:016x}",
+        run_function, stack_region
     );
 
     let orig_regs = remote.read_regs()?;
     let regs = libc::user_regs_struct {
-        rip: code_region,
+        rip: run_function,
         rsp: stack_region + 0x1000 - std::mem::size_of::<usize>() as u64,
         ..orig_regs
     };
