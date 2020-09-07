@@ -10,13 +10,17 @@ fn main() {
 
 #[cfg(target_os = "linux")]
 mod example {
-    use std::path::{Path, PathBuf};
+    use std::{
+        os::unix::ffi::OsStrExt,
+        path::{Path, PathBuf},
+    };
 
     use headcrab::{
         symbol::{DisassemblySource, RelocatedDwarf},
         target::{AttachOptions, LinuxTarget, UnixTarget},
     };
 
+    use headcrab_inject::{compile_clif_code, FuncId, InjectionContext, DataId};
     use repl_tools::HighlightAndComplete;
     use rustyline::CompletionType;
 
@@ -48,6 +52,8 @@ mod example {
         Help|h: (),
         /// Inject and run clif ir
         Inject: PathBuf,
+        /// Inject a dynamic library and run it's `__headcrab_command` function
+        InjectLib: PathBuf,
         /// Exit
         Exit|quit|q: (),
     });
@@ -294,6 +300,85 @@ mod example {
                     &|sym| context.debuginfo().get_symbol_address(sym).unwrap() as u64,
                     &std::fs::read_to_string(file)?,
                 );
+            }
+            ReplCommand::InjectLib(file) => {
+                context.load_debuginfo_if_necessary()?;
+
+                let mut inj_ctx = InjectionContext::new(context.remote()?)?;
+                inj_ctx.define_function(
+                    FuncId::from_u32(0),
+                    context.debuginfo().get_symbol_address("dlopen").unwrap() as u64,
+                );
+                inj_ctx.define_function(
+                    FuncId::from_u32(1),
+                    context.debuginfo().get_symbol_address("dlsym").unwrap() as u64,
+                );
+
+                let mut file = file.canonicalize()?.as_os_str().as_bytes().to_owned();
+                file.push(0);
+                inj_ctx.define_data_object_with_bytes(DataId::from_u32(0), &file)?;
+
+                inj_ctx.define_data_object_with_bytes(DataId::from_u32(1), b"__headcrab_command\0")?;
+
+                let isa = headcrab_inject::target_isa();
+
+                let functions = headcrab_inject::parse_functions(
+                    r#"
+        function u0:2() system_v {
+            gv0 = symbol u1:0 ; dylib file name
+            gv1 = symbol u1:1 ; __headcrab_command
+            sig0 = (i64, i32) -> i64 system_v ; fn(filename: *const c_char, flag: c_int) -> *mut c_void
+            sig1 = (i64, i64) -> i64 system_v ; fn(handle: *mut c_void, symbol: *const c_char) -> *mut c_void
+            sig2 = () system_v ; signature for __headcrab_command
+            fn0 = u0:0 sig0 ; dlopen
+            fn1 = u0:1 sig1 ; dlsym
+
+        block0:
+            v0 = global_value.i64 gv0
+            v1 = iconst.i32 0x2 ; RTLD_NOW
+            v2 = call fn0(v0, v1)
+            v3 = global_value.i64 gv1
+            v4 = call fn1(v2, v3)
+            call_indirect sig2, v4()
+            return
+        }"#,
+                )
+                .unwrap();
+                let mut ctx = headcrab_inject::Context::new();
+                for func in functions {
+                    ctx.clear();
+                    ctx.func = func;
+                    compile_clif_code(&mut inj_ctx, &*isa, &mut ctx)?;
+                }
+
+                let run_function = inj_ctx.lookup_function(FuncId::from_u32(2));
+                let stack_region = inj_ctx.allocate_readwrite(0x1000)?;
+                println!(
+                    "run function: 0x{:016x} stack: 0x{:016x}",
+                    run_function, stack_region
+                );
+
+                // Ensure that we hit a breakpoint trap when returning from the injected function.
+                inj_ctx
+                    .target()
+                    .write()
+                    .write(
+                        &(inj_ctx.breakpoint_trap() as usize),
+                        stack_region as usize + 0x1000 - std::mem::size_of::<usize>(),
+                    )
+                    .apply()?;
+
+                let orig_regs = inj_ctx.target().read_regs()?;
+                println!("orig rip: {:016x}", orig_regs.rip);
+                let regs = libc::user_regs_struct {
+                    rip: run_function,
+                    rsp: stack_region + 0x1000 - std::mem::size_of::<usize>() as u64,
+                    ..orig_regs
+                };
+                inj_ctx.target().write_regs(regs)?;
+                println!("{:?}", inj_ctx.target().unpause()?);
+                println!("{:016x}", inj_ctx.target().read_regs()?.rip);
+                inj_ctx.target().write_regs(orig_regs)?;
             }
             ReplCommand::Exit(()) => unreachable!("Should be handled earlier"),
         }

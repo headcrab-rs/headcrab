@@ -2,7 +2,7 @@
 ; define: data0 "Hello World from injected code!\n\0"
 
 function u0:1() system_v {
-    gv0 = symbol colocated u1:0
+    gv0 = symbol u1:0
     sig0 = (i64) system_v
     fn0 = u0:0 sig0
 

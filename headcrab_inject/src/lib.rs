@@ -4,13 +4,14 @@ use cranelift_codegen::{
     binemit, ir,
     isa::{self, TargetIsa},
     settings::{self, Configurable},
-    Context,
 };
-use cranelift_module::{DataId, FuncId, FuncOrDataId};
 use headcrab::target::{LinuxTarget, UnixTarget};
 
 mod memory;
 
+pub use cranelift_codegen::Context;
+pub use cranelift_module::{DataId, FuncId, FuncOrDataId};
+pub use cranelift_reader::parse_functions;
 pub use memory::Memory;
 
 #[derive(Debug)]
@@ -88,6 +89,10 @@ impl<'a> InjectionContext<'a> {
         self.target
     }
 
+    pub fn breakpoint_trap(&self) -> u64 {
+        self.breakpoint_trap
+    }
+
     pub fn allocate_code(&mut self, size: u64) -> Result<u64, Box<dyn Error>> {
         self.code.allocate(self.target, size, 8)
     }
@@ -115,6 +120,30 @@ impl<'a> InjectionContext<'a> {
     pub fn lookup_data_object(&self, data_id: DataId) -> u64 {
         self.data_objects[&data_id]
     }
+
+    pub fn define_data_object_with_bytes(
+        &mut self,
+        data_id: DataId,
+        bytes: &[u8],
+    ) -> Result<(), Box<dyn Error>> {
+        let alloc = self.allocate_readonly(bytes.len() as u64)?;
+        self.target
+            .write()
+            .write_slice(bytes, alloc as usize)
+            .apply()?;
+        self.define_data_object(data_id, alloc);
+
+        Ok(())
+    }
+}
+
+pub fn target_isa() -> Box<dyn TargetIsa> {
+    let mut flag_builder = settings::builder();
+    flag_builder.set("use_colocated_libcalls", "false").unwrap();
+    let flags = settings::Flags::new(flag_builder);
+    isa::lookup("x86_64".parse().unwrap())
+        .unwrap()
+        .finish(flags)
 }
 
 pub fn compile_clif_code(
@@ -232,13 +261,7 @@ pub fn inject_clif_code(
                                 .trim_matches('"')
                                 .replace("\\n", "\n")
                                 .replace("\\0", "\0");
-                            let data_region = inj_ctx.allocate_readonly(content.len() as u64)?;
-                            inj_ctx
-                                .target
-                                .write()
-                                .write_slice(content.as_bytes(), data_region as usize)
-                                .apply()?;
-                            inj_ctx.define_data_object(data_id, data_region);
+                            inj_ctx.define_data_object_with_bytes(data_id, content.as_bytes())?;
                         } else {
                             todo!();
                         }

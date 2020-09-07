@@ -3,11 +3,6 @@
 mod test_utils;
 
 #[cfg(target_os = "linux")]
-use cranelift_codegen::{
-    isa,
-    settings::{self, Configurable},
-};
-#[cfg(target_os = "linux")]
 use cranelift_module::FuncId;
 #[cfg(target_os = "linux")]
 use headcrab::{symbol::RelocatedDwarf, target::UnixTarget};
@@ -38,12 +33,7 @@ fn inject_abort() -> Result<(), Box<dyn std::error::Error>> {
     println!("exit fn ptr: {:016x}", abort_function);
     inj_ctx.define_function(FuncId::from_u32(0), abort_function);
 
-    let mut flag_builder = settings::builder();
-    flag_builder.set("use_colocated_libcalls", "false").unwrap();
-    let flags = settings::Flags::new(flag_builder);
-    let isa = isa::lookup("x86_64".parse().unwrap())
-        .unwrap()
-        .finish(flags);
+    let isa = headcrab_inject::target_isa();
 
     let functions = cranelift_reader::parse_functions(
         r#"
