@@ -84,8 +84,8 @@ impl super::Dwarf {
 
 pub type CrabResult<T> = Result<T, Box<dyn std::error::Error>>;
 
-#[derive(Debug)]
 /// A line in a source code is represented as a line number and the string.
+#[derive(Debug)]
 struct SourceLine {
     line_no: usize,
     line_str: String,
