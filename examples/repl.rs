@@ -51,7 +51,7 @@ mod example {
         /// Print this help
         Help|h: (),
         /// Inject and run clif ir
-        Inject: PathBuf,
+        InjectClif: PathBuf,
         /// Inject a dynamic library and run it's `__headcrab_command` function
         InjectLib: PathBuf,
         /// Exit
@@ -291,8 +291,8 @@ mod example {
             ReplCommand::Locals(()) => {
                 return show_locals(context);
             }
-            ReplCommand::Inject(file) => {
-                return inject(context, file);
+            ReplCommand::InjectClif(file) => {
+                return inject_clif(context, file);
             }
             ReplCommand::InjectLib(file) => {
                 return inject_lib(context, file);
@@ -616,7 +616,7 @@ mod example {
         Ok(())
     }
 
-    fn inject(context: &mut Context, file: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+    fn inject_clif(context: &mut Context, file: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
         context.load_debuginfo_if_necessary()?;
 
         let mut inj_ctx = InjectionContext::new(context.remote()?)?;
@@ -672,28 +672,8 @@ mod example {
 
         let isa = headcrab_inject::target_isa();
 
-        let functions = headcrab_inject::parse_functions(
-                    r#"
-        function u0:2() system_v {
-            gv0 = symbol u1:0 ; dylib file name
-            gv1 = symbol u1:1 ; __headcrab_command
-            sig0 = (i64, i32) -> i64 system_v ; fn(filename: *const c_char, flag: c_int) -> *mut c_void
-            sig1 = (i64, i64) -> i64 system_v ; fn(handle: *mut c_void, symbol: *const c_char) -> *mut c_void
-            sig2 = () system_v ; signature for __headcrab_command
-            fn0 = u0:0 sig0 ; dlopen
-            fn1 = u0:1 sig1 ; dlsym
-
-        block0:
-            v0 = global_value.i64 gv0
-            v1 = iconst.i32 0x2 ; RTLD_NOW
-            v2 = call fn0(v0, v1)
-            v3 = global_value.i64 gv1
-            v4 = call fn1(v2, v3)
-            call_indirect sig2, v4()
-            return
-        }"#,
-                )
-                .unwrap();
+        let functions =
+            headcrab_inject::parse_functions(include_str!("./inject_dylib.clif")).unwrap();
         let mut ctx = headcrab_inject::Context::new();
         for func in functions {
             ctx.clear();
