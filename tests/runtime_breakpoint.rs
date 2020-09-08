@@ -33,7 +33,7 @@ fn runtime_breakpoint() -> Result<(), Box<dyn std::error::Error>> {
         .set_breakpoint(main_addr)
         .expect("Cannot set breakpoint");
 
-    assert!(breakpoint.is_active());
+    assert!(breakpoint.is_armed());
 
     // run the program
     target.unpause()?;
@@ -58,7 +58,7 @@ fn multiple_breakpoints() -> Result<(), Box<dyn std::error::Error>> {
         .expect("No 'main' symbol");
     // set a breakpoint at main
     let breakpoint = target.set_breakpoint(main_addr)?;
-    assert!(breakpoint.is_active());
+    assert!(breakpoint.is_armed());
     // Test that duplicate breakpoints do no harm
     let breakpoint2 = target.set_breakpoint(main_addr)?;
 
@@ -70,6 +70,7 @@ fn multiple_breakpoints() -> Result<(), Box<dyn std::error::Error>> {
 
     //  Let's go a few instructions back and see if disabling the breakpoint works
     regs.rip -= 3;
+
     target.write_regs(regs)?;
     breakpoint2.disable()?;
 
@@ -93,22 +94,19 @@ fn looping_breakpoint() -> Result<(), Box<dyn std::error::Error>> {
         .get_symbol_address("breakpoint")
         .expect("No 'breakpoint' symbol");
     // set the breakpoint
-    let mut breakpoint = target.set_breakpoint(bp_addr)?;
-    assert!(breakpoint.is_active());
+    let breakpoint = target.set_breakpoint(bp_addr)?;
+    assert!(breakpoint.is_armed());
+    assert!(breakpoint.is_enabled());
 
-    let mut status = target.unpause()?;
-    // The testee should call the `breakpoint()` function 8 times
+    // The testee should call the `breakpoint()` function 7 times
     // make sure we hit the breakpoint each time
     for _ in 0..8 {
+        let status = target.unpause()?;
         assert_eq!(status, test_utils::ws_sigtrap(&target));
 
         let regs = target.read_regs()?;
         assert_eq!(regs.rip as usize, bp_addr);
-
-        // reset the breakpoint, now that it has been hit
-        breakpoint.set().expect("could not set breakpoint");
-        assert!(breakpoint.is_active());
-        status = target.unpause()?;
+        assert!(!breakpoint.is_armed());
     }
     test_utils::continue_to_end(&target);
     Ok(())
@@ -131,15 +129,13 @@ fn single_step() -> Result<(), Box<dyn std::error::Error>> {
     target.unpause()?;
     // Order of instructions  according to gdb:
     // <main>, <main+4>, <main+8>, <main+11>,  <main+17>
-    // `si` in gdb actually skips the `push rbp` & `mov rsp rbp` instructions
-    // which means gdb goes from <main> straight to <main+4>, "skipping" the 1byte `mov`
     let offsets = [0, 1, 4, 8, 11, 17];
     for offset in offsets.iter() {
         let rip = test_utils::current_ip(&target);
         //println!("rip: {:#012x}", rip);
-        assert_eq!(rip, (main_addr as u64 + offset),);
+        assert_eq!(rip, (main_addr as u64 + offset), "Steps");
         let status = target.step()?;
-        assert_eq!(status, test_utils::ws_sigtrap(&target));
+        assert_eq!(status, test_utils::ws_sigtrap(&target), "stataus");
     }
     test_utils::continue_to_end(&target);
     Ok(())
