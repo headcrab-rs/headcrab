@@ -413,7 +413,6 @@ mod example {
                     ))?
                 }
             }
-
             // Patch the `pause` instruction inside a function called `breakpoint` to be a
             // breakpoint. This is useful while we don't have support for setting breakpoints at
             // runtime yet.
