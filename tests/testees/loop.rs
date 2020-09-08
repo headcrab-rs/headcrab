@@ -5,7 +5,9 @@ fn breakpoint(counter: u8) -> () {
 }
 
 fn main() {
-    for i in 0..8 {
+    let breaks = 8;
+    for i in 0..breaks {
         breakpoint(i);
     }
+    println!("Called `breakpoint` {} times.", breaks - 1);
 }
