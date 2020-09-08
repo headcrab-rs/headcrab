@@ -106,13 +106,10 @@ impl UnixTarget for LinuxTarget {
                 .borrow_mut()
                 .get_mut(&(self.read_regs()?.rip as usize - 1))
             {
-                // scope the borrow of hit_breakpoint
-                {
-                    // Register what breakpoint was  hit
-                    self.hit_breakpoint.borrow_mut().replace(bp.clone());
-                }
+                // Register which breakpoint was  hit
+                self.hit_breakpoint.borrow_mut().replace(bp.clone());
 
-                // Restore the program to it's uninstrumented state
+                // Restore the program to its uninstrumented state
                 self.restore_breakpoint(bp)?;
             };
         }
@@ -141,7 +138,7 @@ impl LinuxTarget {
     fn handle_breakpoint(&self) -> Result<bool, Box<dyn std::error::Error>> {
         let mut stepped = false;
 
-        let bp = { self.hit_breakpoint.borrow().clone() };
+        let bp = { self.hit_breakpoint.borrow_mut().take() };
         // if we have hit a breakpoint previously
         if let Some(mut bp) = bp {
             let rip = self.read_regs()?.rip as usize;
@@ -155,11 +152,6 @@ impl LinuxTarget {
             // else user has modified rip and we're not at the breakpoint anymore
             if bp.is_enabled() {
                 bp.set()?;
-            }
-
-            // clear the last hit breakpoint
-            {
-                self.hit_breakpoint.borrow_mut().take();
             }
         }
         Ok(stepped)
