@@ -524,36 +524,36 @@ mod example {
                         .function_debuginfo()
                         .ok_or_else(|| "No dwarf debuginfo for function".to_owned())?;
 
+                    let mut eval_ctx = X86_64EvalContext {
+                        frame_base: None,
+                        regs,
+                    };
+
                     // FIXME handle DW_TAG_inlined_subroutine with DW_AT_frame_base in parent DW_TAG_subprogram
-                    let frame_base = if let Some(frame_base) =
+                    if let Some(frame_base) =
                         unit.entry(dw_die_offset)?.attr(gimli::DW_AT_frame_base)?
                     {
                         let frame_base = frame_base.exprloc_value().unwrap();
                         let res = headcrab::symbol::dwarf_utils::evaluate_expression(
-                            unit,
-                            frame_base,
-                            None,
-                            get_linux_x86_64_reg(regs),
+                            unit, frame_base, &eval_ctx,
                         )?;
                         assert_eq!(res.len(), 1);
                         assert_eq!(res[0].bit_offset, None);
                         assert_eq!(res[0].size_in_bits, None);
-                        Some(match res[0].location {
+                        match res[0].location {
                             gimli::Location::Register {
                                 register: gimli::X86_64::RBP,
-                            } => regs.rbp,
+                            } => eval_ctx.frame_base = Some(regs.rbp),
                             ref loc => unimplemented!("{:?}", loc), // FIXME
-                        })
-                    } else {
-                        None
-                    };
+                        }
+                    }
 
                     frame.each_argument::<Box<dyn std::error::Error>, _>(func as u64, |local| {
-                        show_local("arg", context, unit, frame_base, regs, local)
+                        show_local("arg", context, unit, &eval_ctx, local)
                     })?;
 
                     frame.each_local::<Box<dyn std::error::Error>, _>(func as u64, |local| {
-                        show_local("    ", context, unit, frame_base, regs, local)
+                        show_local("    ", context, unit, &eval_ctx, local)
                     })?;
 
                     frame.print_debuginfo();
@@ -708,12 +708,36 @@ mod example {
         }
     }
 
+    struct X86_64EvalContext {
+        frame_base: Option<u64>,
+        regs: libc::user_regs_struct,
+    }
+
+    impl headcrab::symbol::dwarf_utils::EvalContext for X86_64EvalContext {
+        fn frame_base(&self) -> u64 {
+            self.frame_base.unwrap()
+        }
+
+        fn register(&self, register: gimli::Register, base_type: gimli::ValueType) -> gimli::Value {
+            get_linux_x86_64_reg(self.regs)(register, base_type)
+        }
+
+        fn memory(
+            &self,
+            _address: u64,
+            _size: u8,
+            _address_space: Option<u64>,
+            _base_type: gimli::ValueType,
+        ) -> gimli::Value {
+            todo!()
+        }
+    }
+
     fn show_local<'a>(
         kind: &str,
         context: &Context,
         unit: &gimli::Unit<headcrab::symbol::Reader<'a>>,
-        frame_base: Option<u64>,
-        regs: libc::user_regs_struct,
+        eval_ctx: &X86_64EvalContext,
         local: headcrab::symbol::Local,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let type_size = if let Some(type_) = local.type_() {
@@ -733,8 +757,7 @@ mod example {
                 let res = headcrab::symbol::dwarf_utils::evaluate_expression(
                     unit,
                     expr.clone(),
-                    frame_base,
-                    get_linux_x86_64_reg(regs),
+                    eval_ctx,
                 )?;
                 assert_eq!(res.len(), 1);
                 assert_eq!(res[0].bit_offset, None);
@@ -754,7 +777,8 @@ mod example {
                             }
                             format!("{}", val)
                         }
-                        _ => unimplemented!("{}", type_size),
+                        // FIXME
+                        _ => format!("unimplemented: size {}", type_size),
                     },
                     gimli::Location::Value { value } => match value {
                         gimli::Value::Generic(val) => format!("{}", val),
