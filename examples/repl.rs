@@ -41,6 +41,8 @@ mod example {
         Stepi|si: (),
         /// Continue the program being debugged
         Continue|cont: (),
+        /// Set a breakpoint at symbol or address
+        Breakpoint|b: String,
         // FIXME move the `read:` part before the `--` in the help
         /// read: List registers and their content for the current stack frame
         Registers|regs: String,
@@ -275,6 +277,7 @@ mod example {
             ReplCommand::Kill(()) => println!("{:?}", context.remote()?.kill()?),
             ReplCommand::Stepi(()) => println!("{:?}", context.remote()?.step()?),
             ReplCommand::Continue(()) => println!("{:?}", context.remote()?.unpause()?),
+            ReplCommand::Breakpoint(sub_cmd) => set_breakpoint(context, &sub_cmd)?,
             ReplCommand::Registers(sub_cmd) => match &*sub_cmd {
                 "" => Err(format!(
                     "Expected subcommand found nothing. Try `regs read`"
@@ -310,6 +313,35 @@ mod example {
             ReplCommand::Exit(()) => unreachable!("Should be handled earlier"),
         }
 
+        Ok(())
+    }
+
+    fn set_breakpoint(
+        context: &mut Context,
+        sub_cmd: &String,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        context.load_debuginfo_if_necessary();
+        if let Ok(addr) = {
+            i64::from_str_radix(&sub_cmd, 10)
+                .map(|addr| addr as usize)
+                .map_err(|e| Box::new(e))
+                .or_else(|_e| {
+                    let raw_num = sub_cmd.trim_start_matches("0x");
+                    i64::from_str_radix(raw_num, 16).map(|addr| addr as usize)
+                })
+                .or_else(|_e| {
+                    context
+                        .debuginfo()
+                        .get_symbol_address(&sub_cmd)
+                        .ok_or(Box::new(format!("No such symbol {}", sub_cmd)))
+                })
+        } {
+            context.mut_remote()?.set_breakpoint(addr)?;
+        } else {
+            Err(format!(
+                "Brekapoint must be set on a symbol or at a given address"
+            ))?
+        }
         Ok(())
     }
 
