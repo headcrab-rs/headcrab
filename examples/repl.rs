@@ -20,7 +20,9 @@ mod example {
         target::{AttachOptions, LinuxTarget, UnixTarget},
     };
 
+    #[cfg(target_os = "linux")]
     use headcrab_inject::{compile_clif_code, DataId, FuncId, InjectionContext};
+
     use repl_tools::HighlightAndComplete;
     use rustyline::CompletionType;
 
@@ -616,6 +618,17 @@ mod example {
         Ok(())
     }
 
+    #[cfg(not(target_os = "linux"))]
+    fn inject_clif(
+        _context: &mut Context,
+        _file: PathBuf,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        Err("injectclif is currently only supported on Linux"
+            .to_string()
+            .into())
+    }
+
+    #[cfg(target_os = "linux")]
     fn inject_clif(context: &mut Context, file: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
         context.load_debuginfo_if_necessary()?;
 
@@ -651,6 +664,17 @@ mod example {
         Ok(())
     }
 
+    #[cfg(not(target_os = "linux"))]
+    fn inject_lib(
+        _context: &mut Context,
+        _file: PathBuf,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        Err("injectclif is currently only supported on Linux"
+            .to_string()
+            .into())
+    }
+
+    #[cfg(target_os = "linux")]
     fn inject_lib(context: &mut Context, file: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
         context.load_debuginfo_if_necessary()?;
 
