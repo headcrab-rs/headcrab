@@ -160,6 +160,7 @@ impl Snippet {
 
 /// This module has methods to syntax highlighting of the code snippet.
 /// This is an adaptation of [this](https://github.com/bjorn3/pretty_backtrace/blob/c8a19b94f369a2edd9d58b07eb4310d2e0a2c991/src/display_frame.rs#L103-L113).
+#[cfg(feature = "syntax-highlighting")]
 pub mod pretty {
     use super::{Snippet, SourceLine};
     use syntect::{

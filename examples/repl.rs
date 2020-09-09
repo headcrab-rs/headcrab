@@ -28,6 +28,7 @@ mod example {
 
     use repl_tools::HighlightAndComplete;
     use rustyline::CompletionType;
+    use repl_tools::HighlightAndComplete;
     use rustyline::{completion::Pair, CompletionType};
 
     repl_tools::define_repl_cmds!(enum ReplCommand {
