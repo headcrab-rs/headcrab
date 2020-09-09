@@ -340,7 +340,7 @@ mod example {
             context.mut_remote()?.set_breakpoint(addr)?;
         } else {
             Err(format!(
-                "Brekapoint must be set on a symbol or at a given address.\n(headcrab) b main\n(headcrab) b 0x0000555555559394"
+                "Breakpoints must be set on a symbol or at a given address. For example `break main` or `break 0x0000555555559394`"
             ))?
         }
         Ok(())
