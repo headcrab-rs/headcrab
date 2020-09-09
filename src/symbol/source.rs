@@ -156,12 +156,36 @@ impl Snippet {
             key_column_idx: column - 1,
         })
     }
+
+    #[cfg(not(feature = "syntax-highlighting"))]
+    pub fn higlight(&self) {
+        eprintln!(
+            "\x1b[96m{}::\x1b[37m{}()\x1b[0m\n",
+            self.file_path, self.fn_name
+        );
+        for (idx, SourceLine { line_no, line_str }) in self.lines.iter().enumerate() {
+            let line_marker = if idx == self.key_line_idx {
+                "\x1b[91m>\x1b[0m"
+            } else {
+                " \x1b[2m"
+            };
+
+            eprintln!("{} {:>6} | {}", line_marker, *line_no, line_str);
+            if idx == self.key_line_idx && self.key_column_idx != 0 {
+                eprintln!(
+                    "         | {:width$}\x1b[91m^\x1b[0m",
+                    " ",
+                    width = self.key_column_idx
+                );
+            }
+        }
+    }
 }
 
 /// This module has methods to syntax highlighting of the code snippet.
 /// This is an adaptation of [this](https://github.com/bjorn3/pretty_backtrace/blob/c8a19b94f369a2edd9d58b07eb4310d2e0a2c991/src/display_frame.rs#L103-L113).
 #[cfg(feature = "syntax-highlighting")]
-pub mod pretty {
+mod pretty {
     use super::{Snippet, SourceLine};
     use syntect::{
         easy::HighlightLines,
