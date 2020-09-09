@@ -1,0 +1,18 @@
+function u0:2() system_v {
+    gv0 = symbol u1:0 ; dylib file name
+    gv1 = symbol u1:1 ; __headcrab_command
+    sig0 = (i64, i32) -> i64 system_v ; fn(filename: *const c_char, flag: c_int) -> *mut c_void
+    sig1 = (i64, i64) -> i64 system_v ; fn(handle: *mut c_void, symbol: *const c_char) -> *mut c_void
+    sig2 = () system_v ; signature for __headcrab_command
+    fn0 = u0:0 sig0 ; dlopen
+    fn1 = u0:1 sig1 ; dlsym
+
+block0:
+    v0 = global_value.i64 gv0
+    v1 = iconst.i32 0x2 ; RTLD_NOW
+    v2 = call fn0(v0, v1)
+    v3 = global_value.i64 gv1
+    v4 = call fn1(v2, v3)
+    call_indirect sig2, v4()
+    return
+}

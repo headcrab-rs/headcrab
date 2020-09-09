@@ -17,6 +17,7 @@ use std::{
     ffi::CString,
     fs::File,
     io::{BufRead, BufReader},
+    path::Path,
 };
 
 pub use hardware_breakpoint::{
@@ -27,7 +28,7 @@ pub use software_breakpoint::Breakpoint;
 pub use writemem::WriteMemory;
 
 lazy_static::lazy_static! {
-    static ref PAGE_SIZE: usize = unsafe { libc::sysconf(libc::_SC_PAGESIZE) as usize };
+    pub static ref PAGE_SIZE: usize = unsafe { libc::sysconf(libc::_SC_PAGESIZE) as usize };
     #[cfg(target_arch="x86_64")]
     static ref DEBUG_REG_OFFSET: usize = unsafe {
         let x = std::mem::zeroed::<libc::user>();
@@ -167,8 +168,11 @@ impl LinuxTarget {
     }
 
     /// Launches a new debuggee process
-    pub fn launch(path: &str) -> Result<(LinuxTarget, WaitStatus), Box<dyn std::error::Error>> {
-        let (pid, status) = unix::launch(CString::new(path)?)?;
+    pub fn launch(
+        path: impl AsRef<Path>,
+    ) -> Result<(LinuxTarget, nix::sys::wait::WaitStatus), Box<dyn std::error::Error>> {
+        use std::os::unix::ffi::OsStrExt;
+        let (pid, status) = unix::launch(CString::new(path.as_ref().as_os_str().as_bytes())?)?;
         let target = LinuxTarget::new(pid);
         target.kill_on_exit()?;
         Ok((target, status))
