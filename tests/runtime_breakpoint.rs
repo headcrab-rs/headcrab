@@ -127,8 +127,8 @@ fn single_step() -> Result<(), Box<dyn std::error::Error>> {
 
     // start the program
     target.unpause()?;
-    // Order of instructions  according to gdb:
-    // <main>, <main+4>, <main+8>, <main+11>,  <main+17>
+    // Order of instructions:
+    // <main>, <main+1> <main+4>, <main+8>, <main+11>,  <main+17>
     let offsets = [0, 1, 4, 8, 11, 17];
     for offset in offsets.iter() {
         let rip = test_utils::current_ip(&target);
