@@ -116,7 +116,7 @@ impl<'a> Frame<'a> {
 
 pub struct Local<'a, 'ctx> {
     name: Option<Reader<'ctx>>,
-    type_: Option<gimli::DebuggingInformationEntry<'a, 'a, Reader<'ctx>>>,
+    type_: gimli::DebuggingInformationEntry<'a, 'a, Reader<'ctx>>,
     value: LocalValue<'ctx>,
 }
 
@@ -181,18 +181,25 @@ impl<'a, 'ctx> Local<'a, 'ctx> {
             })
             .transpose()?;
 
-        let type_ = origin_entry
-            .attr(gimli::DW_AT_type)?
-            .map(|attr| match attr.value() {
-                gimli::AttributeValue::UnitRef(type_) => Ok(type_),
-                val => Err(format!(
+        let type_attr = origin_entry.attr(gimli::DW_AT_type)?.ok_or_else(|| {
+            format!(
+                "Missing DW_AT_type for `{}`",
+                name.as_ref()
+                    .map(|n| String::from_utf8_lossy(n.bytes()).into_owned())
+                    .unwrap_or_else(|| "<unnamed local>".to_owned())
+            )
+        })?;
+
+        let type_ = match type_attr.value() {
+            gimli::AttributeValue::UnitRef(type_) => unit.entry(type_)?,
+            val => {
+                return Err(format!(
                     "`{:?}` is not a valid value for a DW_AT_type attribute",
                     val
-                )),
-            })
-            .transpose()?
-            .map(|type_| unit.entry(type_))
-            .transpose()?;
+                )
+                .into())
+            }
+        };
 
         let value = if let Some(loc) = entry.attr(gimli::DW_AT_location)? {
             match loc.value() {
@@ -230,8 +237,8 @@ impl<'a, 'ctx> Local<'a, 'ctx> {
             .transpose()
     }
 
-    pub fn type_(&'a self) -> Option<&'a gimli::DebuggingInformationEntry<'a, 'a, Reader<'ctx>>> {
-        self.type_.as_ref()
+    pub fn type_(&'a self) -> &'a gimli::DebuggingInformationEntry<'a, 'a, Reader<'ctx>> {
+        &self.type_
     }
 
     pub fn value(&'a self) -> &'a LocalValue<'ctx> {

@@ -740,14 +740,10 @@ mod example {
         eval_ctx: &X86_64EvalContext,
         local: headcrab::symbol::Local,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let type_size = if let Some(type_) = local.type_() {
-            if let Some(size) = type_.attr(gimli::DW_AT_byte_size)? {
-                size.udata_value().unwrap()
-            } else if type_.tag() == gimli::DW_TAG_pointer_type {
-                std::mem::size_of::<usize>() as u64 // FIXME use pointer size of remote
-            } else {
-                0
-            }
+        let type_size = if let Some(size) = local.type_().attr(gimli::DW_AT_byte_size)? {
+            size.udata_value().unwrap()
+        } else if local.type_().tag() == gimli::DW_TAG_pointer_type {
+            std::mem::size_of::<usize>() as u64 // FIXME use pointer size of remote
         } else {
             0
         };
