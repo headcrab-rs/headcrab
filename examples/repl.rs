@@ -320,7 +320,8 @@ mod example {
         context: &mut Context,
         sub_cmd: &String,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        context.load_debuginfo_if_necessary();
+        context.load_debuginfo_if_necessary()?;
+
         if let Ok(addr) = {
             i64::from_str_radix(&sub_cmd, 10)
                 .map(|addr| addr as usize)
@@ -339,7 +340,7 @@ mod example {
             context.mut_remote()?.set_breakpoint(addr)?;
         } else {
             Err(format!(
-                "Brekapoint must be set on a symbol or at a given address"
+                "Brekapoint must be set on a symbol or at a given address.\n(headcrab) b main\n(headcrab) b 0x0000555555559394"
             ))?
         }
         Ok(())
