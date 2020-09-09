@@ -23,7 +23,7 @@ pub use readmem::ReadMemory;
 pub use writemem::WriteMemory;
 
 lazy_static::lazy_static! {
-    static ref PAGE_SIZE: usize = unsafe { libc::sysconf(libc::_SC_PAGESIZE) as usize };
+    pub static ref PAGE_SIZE: usize = unsafe { libc::sysconf(libc::_SC_PAGESIZE) as usize };
     #[cfg(target_arch="x86_64")]
     static ref DEBUG_REG_OFFSET: usize = unsafe {
         let x = std::mem::zeroed::<libc::user>();

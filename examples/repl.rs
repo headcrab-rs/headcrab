@@ -10,12 +10,18 @@ fn main() {
 
 #[cfg(target_os = "linux")]
 mod example {
-    use std::path::{Path, PathBuf};
+    use std::{
+        os::unix::ffi::OsStrExt,
+        path::{Path, PathBuf},
+    };
 
     use headcrab::{
         symbol::{DisassemblySource, RelocatedDwarf},
         target::{AttachOptions, LinuxTarget, UnixTarget},
     };
+
+    #[cfg(target_os = "linux")]
+    use headcrab_inject::{compile_clif_code, DataId, FuncId, InjectionContext};
 
     use repl_tools::HighlightAndComplete;
     use rustyline::CompletionType;
@@ -46,6 +52,10 @@ mod example {
         Locals: (),
         /// Print this help
         Help|h: (),
+        /// Inject and run clif ir
+        InjectClif: PathBuf,
+        /// Inject a dynamic library and run it's `__headcrab_command` function
+        InjectLib: PathBuf,
         /// Exit
         Exit|quit|q: (),
     });
@@ -74,10 +84,9 @@ mod example {
         }
 
         fn load_debuginfo_if_necessary(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-            if self.debuginfo.is_none() {
-                let memory_maps = self.remote()?.memory_maps()?;
-                self.debuginfo = Some(RelocatedDwarf::from_maps(&memory_maps)?);
-            }
+            // FIXME only reload debuginfo when necessary (memory map changed)
+            let memory_maps = self.remote()?.memory_maps()?;
+            self.debuginfo = Some(RelocatedDwarf::from_maps(&memory_maps)?);
             Ok(())
         }
 
@@ -283,6 +292,12 @@ mod example {
             }
             ReplCommand::Locals(()) => {
                 return show_locals(context);
+            }
+            ReplCommand::InjectClif(file) => {
+                return inject_clif(context, file);
+            }
+            ReplCommand::InjectLib(file) => {
+                return inject_lib(context, file);
             }
             ReplCommand::Exit(()) => unreachable!("Should be handled earlier"),
         }
@@ -599,6 +614,119 @@ mod example {
             local.name()?.unwrap_or("<no name>"),
             value
         );
+
+        Ok(())
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn inject_clif(
+        _context: &mut Context,
+        _file: PathBuf,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        Err("injectclif is currently only supported on Linux"
+            .to_string()
+            .into())
+    }
+
+    #[cfg(target_os = "linux")]
+    fn inject_clif(context: &mut Context, file: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+        context.load_debuginfo_if_necessary()?;
+
+        let mut inj_ctx = InjectionContext::new(context.remote()?)?;
+        let run_function = headcrab_inject::inject_clif_code(
+            &mut inj_ctx,
+            &|sym| context.debuginfo().get_symbol_address(sym).unwrap() as u64,
+            &std::fs::read_to_string(file)?,
+        )?;
+
+        let stack = inj_ctx.new_stack(0x1000)?;
+
+        println!(
+            "run function: 0x{:016x} stack: 0x{:016x}",
+            run_function, stack
+        );
+
+        let orig_regs = inj_ctx.target().read_regs()?;
+        let regs = libc::user_regs_struct {
+            rip: run_function,
+            rsp: stack,
+            ..orig_regs
+        };
+        inj_ctx.target().write_regs(regs)?;
+        let status = inj_ctx.target().unpause()?;
+        println!(
+            "{:?} at 0x{:016x}",
+            status,
+            inj_ctx.target().read_regs()?.rip
+        );
+        inj_ctx.target().write_regs(orig_regs)?;
+
+        Ok(())
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn inject_lib(
+        _context: &mut Context,
+        _file: PathBuf,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        Err("injectclif is currently only supported on Linux"
+            .to_string()
+            .into())
+    }
+
+    #[cfg(target_os = "linux")]
+    fn inject_lib(context: &mut Context, file: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+        context.load_debuginfo_if_necessary()?;
+
+        let mut inj_ctx = InjectionContext::new(context.remote()?)?;
+        inj_ctx.define_function(
+            FuncId::from_u32(0),
+            context.debuginfo().get_symbol_address("dlopen").unwrap() as u64,
+        );
+        inj_ctx.define_function(
+            FuncId::from_u32(1),
+            context.debuginfo().get_symbol_address("dlsym").unwrap() as u64,
+        );
+
+        let mut file = file.canonicalize()?.as_os_str().as_bytes().to_owned();
+        file.push(0);
+        inj_ctx.define_data_object_with_bytes(DataId::from_u32(0), &file)?;
+
+        inj_ctx.define_data_object_with_bytes(DataId::from_u32(1), b"__headcrab_command\0")?;
+
+        let isa = headcrab_inject::target_isa();
+
+        let functions =
+            headcrab_inject::parse_functions(include_str!("./inject_dylib.clif")).unwrap();
+        let mut ctx = headcrab_inject::Context::new();
+        for func in functions {
+            ctx.clear();
+            ctx.func = func;
+            compile_clif_code(&mut inj_ctx, &*isa, &mut ctx)?;
+        }
+
+        let run_function = inj_ctx.lookup_function(FuncId::from_u32(2));
+        let stack = inj_ctx.new_stack(0x1000)?;
+        println!(
+            "run function: 0x{:016x} stack: 0x{:016x}",
+            run_function, stack
+        );
+
+        let orig_regs = inj_ctx.target().read_regs()?;
+        println!("orig rip: {:016x}", orig_regs.rip);
+        let regs = libc::user_regs_struct {
+            rip: run_function,
+            rsp: stack,
+            ..orig_regs
+        };
+        inj_ctx.target().write_regs(regs)?;
+        let status = inj_ctx.target().unpause()?;
+        println!(
+            "{:?} at 0x{:016x}",
+            status,
+            inj_ctx.target().read_regs()?.rip
+        );
+        inj_ctx.target().write_regs(orig_regs)?;
 
         Ok(())
     }
