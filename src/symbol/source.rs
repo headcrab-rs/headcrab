@@ -158,7 +158,7 @@ impl Snippet {
     }
 
     #[cfg(not(feature = "syntax-highlighting"))]
-    pub fn higlight(&self) {
+    pub fn highlight(&self) {
         eprintln!(
             "\x1b[96m{}::\x1b[37m{}()\x1b[0m\n",
             self.file_path, self.fn_name
