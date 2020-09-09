@@ -80,4 +80,3 @@ pub fn current_ip(target: &LinuxTarget) -> u64 {
 pub fn ws_sigtrap(target: &LinuxTarget) -> nix::sys::wait::WaitStatus {
     nix::sys::wait::WaitStatus::Stopped(target.pid(), nix::sys::signal::SIGTRAP)
 }
-
