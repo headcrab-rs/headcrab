@@ -548,12 +548,12 @@ mod example {
                         }
                     }
 
-                    frame.each_argument::<Box<dyn std::error::Error>, _>(func as u64, |local| {
-                        show_local("arg", context, unit, &eval_ctx, local)
+                    frame.each_argument(&eval_ctx, func as u64, |local| {
+                        show_local("arg", unit, &eval_ctx, local)
                     })?;
 
-                    frame.each_local::<Box<dyn std::error::Error>, _>(func as u64, |local| {
-                        show_local("    ", context, unit, &eval_ctx, local)
+                    frame.each_local(&eval_ctx, func as u64, |local| {
+                        show_local("    ", unit, &eval_ctx, local)
                     })?;
 
                     frame.print_debuginfo();
@@ -733,15 +733,14 @@ mod example {
         }
     }
 
-    fn show_local<'a>(
+    fn show_local<'ctx>(
         kind: &str,
-        context: &Context,
-        unit: &gimli::Unit<headcrab::symbol::Reader<'a>>,
+        unit: &gimli::Unit<headcrab::symbol::Reader<'ctx>>,
         eval_ctx: &X86_64EvalContext,
-        local: headcrab::symbol::Local,
+        local: headcrab::symbol::Local<'_, 'ctx>,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let value = match local.value() {
-            value @ headcrab::symbol::LocalValue::Expr(_)
+            value @ headcrab::symbol::LocalValue::Pieces(_)
             | value @ headcrab::symbol::LocalValue::Const(_) => {
                 match value.primitive_value(unit, local.type_(), eval_ctx)? {
                     Some(headcrab::symbol::PrimitiveValue::Int { size, signed, data }) => {
