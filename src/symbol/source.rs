@@ -210,6 +210,8 @@ mod pretty {
                     .to_owned(),
                 t,
             );
+
+            // print the filename and the function name.
             eprintln!(
                 "\x1b[96m{}::\x1b[37m{}()\x1b[0m\n",
                 self.file_path, self.fn_name
