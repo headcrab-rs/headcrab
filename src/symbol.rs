@@ -1,6 +1,7 @@
 //! This module provides a naive implementation of symbolication for the time being.
 //! It should be expanded to support multiple data sources.
 
+#[macro_use]
 pub mod dwarf_utils;
 pub mod unwind;
 
@@ -25,21 +26,6 @@ mod sym;
 pub use frame::{Frame, FrameIter, Local, LocalValue, PrimitiveValue};
 pub use relocate::RelocatedDwarf;
 pub use source::{CrabResult, DisassemblySource, Snippet};
-
-macro_rules! dwarf_attr_or_continue {
-    (str($dwarf:ident,$unit:ident) $entry:ident.$name:ident) => {
-        $dwarf
-            .attr_string(&$unit, dwarf_attr_or_continue!($entry.$name).value())?
-            .to_string()?;
-    };
-    ($entry:ident.$name:ident) => {
-        if let Some(attr) = $entry.attr(gimli::$name)? {
-            attr
-        } else {
-            continue;
-        }
-    };
-}
 
 mod rc_cow {
     use std::rc::Rc;
@@ -140,10 +126,11 @@ impl<'a> ParsedDwarf<'a> {
             let mut entries = unit.entries();
             while let Some((_, entry)) = entries.next_dfs()? {
                 if entry.tag() == gimli::DW_TAG_variable {
-                    let name =
-                        dwarf_attr_or_continue!(str(dwarf, unit) entry.DW_AT_name).into_owned();
+                    let name = dwarf_attr!(str(dwarf, unit) entry.DW_AT_name || continue)
+                        .to_string()?
+                        .into_owned();
                     if let Some(expr) =
-                        dwarf_attr_or_continue!(entry.DW_AT_location).exprloc_value()
+                        dwarf_attr!(entry.DW_AT_location || continue).exprloc_value()
                     {
                         vars.insert(name, (header.clone(), expr));
                     }

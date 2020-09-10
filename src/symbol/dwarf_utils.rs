@@ -2,6 +2,93 @@ use gimli::{DebuggingInformationEntry, Dwarf, Unit, UnitOffset, ValueType};
 
 use super::Reader;
 
+macro_rules! dwarf_attr {
+    (str($dwarf:ident,$unit:ident) $entry:ident.$name:ident || $missing:ident) => {
+        if let Some(attr) = $entry.attr(gimli::$name)? {
+            dwarf_attr_not_missing_action!($missing, $dwarf.attr_string(&$unit, attr.value())?)
+        } else {
+            dwarf_attr_missing_action!($missing, $name)
+        }
+    };
+    (unit_ref $entry:ident.$name:ident || $missing:ident) => {
+        if let Some(attr) = $entry.attr(gimli::$name)? {
+            match attr.value() {
+                gimli::AttributeValue::UnitRef(unit_ref) => {
+                    dwarf_attr_not_missing_action!($missing, unit_ref)
+                }
+                val => {
+                    return Err(format!(
+                        "`{:?}` is not a valid value for a {} attribute",
+                        val,
+                        gimli::$name,
+                    )
+                    .into())
+                }
+            }
+        } else {
+            dwarf_attr_missing_action!($missing, $name)
+        }
+    };
+    (udata $entry:ident.$name:ident || $missing:ident) => {
+        if let Some(attr) = $entry.attr(gimli::$name)? {
+            dwarf_attr_not_missing_action!(
+                $missing,
+                attr.udata_value()
+                    .ok_or(concat!("invalid value for", stringify!($name)))?
+            )
+        } else {
+            dwarf_attr_missing_action!($missing, $name)
+        }
+    };
+    (encoding $entry:ident.$name:ident || $missing:ident) => {
+        if let Some(attr) = $entry.attr(gimli::$name)? {
+            match attr.value() {
+                gimli::AttributeValue::Encoding(encoding) => {
+                    dwarf_attr_not_missing_action!($missing, encoding)
+                }
+                encoding => {
+                    return Err(
+                        format!("invalid value for {}: {:?}", gimli::$name, encoding).into(),
+                    )
+                }
+            }
+        } else {
+            dwarf_attr_missing_action!($missing, $name)
+        }
+    };
+    ($entry:ident.$name:ident || $missing:ident) => {
+        if let Some(attr) = $entry.attr(gimli::$name)? {
+            dwarf_attr_not_missing_action!($missing, attr)
+        } else {
+            dwarf_attr_missing_action!($missing, $name)
+        }
+    };
+}
+
+macro_rules! dwarf_attr_not_missing_action {
+    (continue, $val:expr) => {
+        $val
+    };
+    (error, $val:expr) => {
+        $val
+    };
+    (None, $val:expr) => {
+        Some($val)
+    };
+}
+
+macro_rules! dwarf_attr_missing_action {
+    (continue, $name:ident) => {
+        continue;
+    };
+    (error, $name:ident) => {
+        return Err(concat!("missing ", stringify!($name), " attribute").into());
+    };
+    (None, $name:ident) => {
+        None
+    };
+}
+
 pub fn in_range(
     dwarf: &Dwarf<Reader>,
     unit: &Unit<Reader>,

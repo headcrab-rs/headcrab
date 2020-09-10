@@ -158,22 +158,8 @@ impl<'ctx> LocalValue<'ctx> {
     ) -> Result<Option<PrimitiveValue>, Box<dyn std::error::Error>> {
         match ty.tag() {
             gimli::DW_TAG_base_type => {
-                let size = ty
-                    .attr_value(gimli::DW_AT_byte_size)?
-                    .ok_or("missing DW_AT_byte_size")?
-                    .udata_value()
-                    .ok_or("invalid value for DW_ATE_byte_size")?;
-                let encoding = ty
-                    .attr_value(gimli::DW_AT_encoding)?
-                    .ok_or("missing DW_AT_encoding")?;
-                let encoding = match encoding {
-                    gimli::AttributeValue::Encoding(encoding) => encoding,
-                    _ => {
-                        return Err(
-                            format!("invalid value for DW_AT_encoding: {:?}", encoding).into()
-                        )
-                    }
-                };
+                let size = dwarf_attr!(udata ty.DW_AT_byte_size || error);
+                let encoding = dwarf_attr!(encoding ty.DW_AT_encoding || error);
                 match encoding {
                     gimli::DW_ATE_unsigned | gimli::DW_ATE_signed => {
                         let size = u8::try_from(size).map_err(|_| {
@@ -284,33 +270,9 @@ impl<'a, 'ctx> Local<'a, 'ctx> {
             entry.clone()
         };
 
-        let name = origin_entry
-            .attr(gimli::DW_AT_name)?
-            .map(|name| {
-                name.string_value(&dwarf.debug_str)
-                    .ok_or_else(|| "Local name not a string".to_owned())
-            })
-            .transpose()?;
+        let name = dwarf_attr!(str(dwarf,unit) origin_entry.DW_AT_name || None);
 
-        let type_attr = origin_entry.attr(gimli::DW_AT_type)?.ok_or_else(|| {
-            format!(
-                "Missing DW_AT_type for `{}`",
-                name.as_ref()
-                    .map(|n| String::from_utf8_lossy(n.bytes()).into_owned())
-                    .unwrap_or_else(|| "<unnamed local>".to_owned())
-            )
-        })?;
-
-        let type_ = match type_attr.value() {
-            gimli::AttributeValue::UnitRef(type_) => unit.entry(type_)?,
-            val => {
-                return Err(format!(
-                    "`{:?}` is not a valid value for a DW_AT_type attribute",
-                    val
-                )
-                .into())
-            }
-        };
+        let type_ = unit.entry(dwarf_attr!(unit_ref origin_entry.DW_AT_type || error))?;
 
         let value = if let Some(loc) = entry.attr(gimli::DW_AT_location)? {
             match loc.value() {
@@ -336,8 +298,8 @@ impl<'a, 'ctx> Local<'a, 'ctx> {
                 }
                 val => unreachable!("{:?}", val),
             }
-        } else if let Some(const_val) = entry.attr(gimli::DW_AT_const_value)? {
-            LocalValue::Const(const_val.udata_value().unwrap())
+        } else if let Some(const_val) = dwarf_attr!(udata entry.DW_AT_const_value || None) {
+            LocalValue::Const(const_val)
         } else {
             LocalValue::Unknown
         };
