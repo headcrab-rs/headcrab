@@ -740,50 +740,27 @@ mod example {
         eval_ctx: &X86_64EvalContext,
         local: headcrab::symbol::Local,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let type_size = if let Some(size) = local.type_().attr(gimli::DW_AT_byte_size)? {
-            size.udata_value().unwrap()
-        } else if local.type_().tag() == gimli::DW_TAG_pointer_type {
-            std::mem::size_of::<usize>() as u64 // FIXME use pointer size of remote
-        } else {
-            0
-        };
-
         let value = match local.value() {
-            headcrab::symbol::LocalValue::Expr(expr) => {
-                let res = headcrab::symbol::dwarf_utils::evaluate_expression(
-                    unit,
-                    expr.clone(),
-                    eval_ctx,
-                )?;
-                assert_eq!(res.len(), 1);
-                assert_eq!(res[0].bit_offset, None);
-                assert_eq!(res[0].size_in_bits, None);
-                match res[0].location {
-                    gimli::Location::Address { address } => match type_size {
-                        8 => {
-                            let mut val = 0u64;
-                            unsafe {
-                                context
-                                    .remote()
-                                    .unwrap()
-                                    .read()
-                                    .read(&mut val, address as usize)
-                                    .apply()
-                                    .unwrap();
-                            }
-                            format!("{}", val)
+            value @ headcrab::symbol::LocalValue::Expr(_)
+            | value @ headcrab::symbol::LocalValue::Const(_) => {
+                match value.primitive_value(unit, local.type_(), eval_ctx)? {
+                    Some(headcrab::symbol::PrimitiveValue::Int { size, signed, data }) => {
+                        if signed {
+                            (data << (64 - size * 8) >> (64 - size * 8)).to_string()
+                        } else {
+                            ((data as i64) << (64 - size * 8) >> (64 - size * 8)).to_string()
                         }
-                        // FIXME
-                        _ => format!("unimplemented: size {}", type_size),
-                    },
-                    gimli::Location::Value { value } => match value {
-                        gimli::Value::Generic(val) => format!("{}", val),
-                        val => unimplemented!("{:?}", val),
-                    },
-                    ref loc => unimplemented!("{:?}", loc),
+                    }
+                    Some(headcrab::symbol::PrimitiveValue::Float { is_64, data }) => {
+                        if is_64 {
+                            f64::from_bits(data).to_string()
+                        } else {
+                            f32::from_bits(data as u32).to_string()
+                        }
+                    }
+                    None => "<struct>".to_owned(),
                 }
             }
-            headcrab::symbol::LocalValue::Const(val) => format!("const {}", val),
             headcrab::symbol::LocalValue::OptimizedOut => "<optimized out>".to_owned(),
             headcrab::symbol::LocalValue::Unknown => "<unknown>".to_owned(),
         };

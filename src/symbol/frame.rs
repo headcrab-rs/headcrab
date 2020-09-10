@@ -1,3 +1,4 @@
+use std::convert::TryFrom;
 use std::fmt;
 
 use super::dwarf_utils::SearchAction;
@@ -145,6 +146,141 @@ pub enum LocalValue<'ctx> {
     Unknown,
 }
 
+impl<'ctx> LocalValue<'ctx> {
+    pub fn primitive_value(
+        &self,
+        unit: &gimli::Unit<Reader<'ctx>>,
+        ty: &gimli::DebuggingInformationEntry<'_, '_, Reader<'ctx>>,
+        eval_ctx: &impl super::dwarf_utils::EvalContext,
+    ) -> Result<Option<PrimitiveValue>, Box<dyn std::error::Error>> {
+        match ty.tag() {
+            gimli::DW_TAG_base_type => {
+                let size = ty
+                    .attr_value(gimli::DW_AT_byte_size)?
+                    .ok_or("missing DW_AT_byte_size")?
+                    .udata_value()
+                    .ok_or("invalid value for DW_ATE_byte_size")?;
+                let encoding = ty
+                    .attr_value(gimli::DW_AT_encoding)?
+                    .ok_or("missing DW_AT_encoding")?;
+                let encoding = match encoding {
+                    gimli::AttributeValue::Encoding(encoding) => encoding,
+                    _ => {
+                        return Err(
+                            format!("invalid value for DW_AT_encoding: {:?}", encoding).into()
+                        )
+                    }
+                };
+                match encoding {
+                    gimli::DW_ATE_unsigned | gimli::DW_ATE_signed => {
+                        let size = u8::try_from(size).map_err(|_| {
+                            format!("`{}` is too big for DW_ATE_unsigned or DW_ATE_signed", size,)
+                        })?;
+                        let data = match self {
+                            LocalValue::Expr(expr) => {
+                                let pieces = super::dwarf_utils::evaluate_expression(
+                                    unit,
+                                    expr.clone(),
+                                    eval_ctx,
+                                )?;
+
+                                if pieces.len() != 1 {
+                                    return Err(format!(
+                                        "expr {:?} returned too many pieces for an integer value",
+                                        expr.clone().operations(unit.encoding()),
+                                    )
+                                    .into());
+                                }
+
+                                if pieces[0].size_in_bits.is_none()
+                                    || pieces[0].size_in_bits.unwrap() == u64::from(size) * 8
+                                {
+                                } else {
+                                    return Err(format!(
+                                        "expr {:?} returned wrong size for piece {:?}",
+                                        expr.clone().operations(unit.encoding()),
+                                        pieces[0],
+                                    )
+                                    .into());
+                                }
+                                // FIXME handle this
+                                assert!(
+                                    pieces[0].bit_offset.is_none(),
+                                    "unhandled bit_offset for piece {:?}",
+                                    pieces[0]
+                                );
+
+                                let value = match &pieces[0].location {
+                                    gimli::Location::Empty => {
+                                        return Err(format!(
+                                            "expr {:?} returned empty piece for an integer value",
+                                            expr.clone().operations(unit.encoding()),
+                                        )
+                                        .into())
+                                    }
+                                    gimli::Location::Register { register } => {
+                                        eval_ctx.register(
+                                            *register,
+                                            gimli::ValueType::Generic, /* FIXME */
+                                        )
+                                    }
+                                    gimli::Location::Address { address } => eval_ctx.memory(
+                                        *address,
+                                        size,
+                                        None,
+                                        gimli::ValueType::Generic, /* FIXME */
+                                    ),
+                                    gimli::Location::Value { value } => *value,
+                                    gimli::Location::Bytes { value: _ } => todo!(),
+                                    gimli::Location::ImplicitPointer {
+                                        value: _,
+                                        byte_offset: _,
+                                    } => {
+                                        return Err(format!(
+                                        "expr {:?} returned implicit pointer for an integer value",
+                                        expr.clone().operations(unit.encoding()),
+                                    )
+                                        .into())
+                                    }
+                                };
+                                match value {
+                                    gimli::Value::Generic(data) => data,
+                                    gimli::Value::I8(data) => data as u64,
+                                    gimli::Value::U8(data) => data as u64,
+                                    gimli::Value::I16(data) => data as u64,
+                                    gimli::Value::U16(data) => data as u64,
+                                    gimli::Value::I32(data) => data as u64,
+                                    gimli::Value::U32(data) => data as u64,
+                                    gimli::Value::I64(data) => data as u64,
+                                    gimli::Value::U64(data) => data,
+                                    gimli::Value::F32(_) | gimli::Value::F64(_) => {
+                                        return Err(format!(
+                                            "expr {:?} returned float for an integer value",
+                                            expr.clone().operations(unit.encoding()),
+                                        )
+                                        .into())
+                                    }
+                                }
+                            }
+                            LocalValue::Const(data) => *data,
+                            LocalValue::OptimizedOut => return Ok(None),
+                            LocalValue::Unknown => return Ok(None),
+                        };
+                        Ok(Some(PrimitiveValue::Int {
+                            size,
+                            signed: encoding == gimli::DW_ATE_signed,
+                            data,
+                        }))
+                    }
+                    _ => todo!("{:?}", encoding),
+                }
+            }
+            gimli::DW_TAG_structure_type => Ok(None),
+            tag => todo!("{:?}", tag),
+        }
+    }
+}
+
 impl fmt::Debug for LocalValue<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -154,6 +290,11 @@ impl fmt::Debug for LocalValue<'_> {
             LocalValue::Unknown => f.write_str("Unknown"),
         }
     }
+}
+
+pub enum PrimitiveValue {
+    Int { size: u8, signed: bool, data: u64 },
+    Float { is_64: bool, data: u64 },
 }
 
 impl<'a, 'ctx> Local<'a, 'ctx> {

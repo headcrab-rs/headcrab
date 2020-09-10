@@ -22,7 +22,7 @@ mod relocate;
 mod source;
 mod sym;
 
-pub use frame::{Frame, FrameIter, Local, LocalValue};
+pub use frame::{Frame, FrameIter, Local, LocalValue, PrimitiveValue};
 pub use relocate::RelocatedDwarf;
 pub use source::{CrabResult, DisassemblySource, Snippet};
 
