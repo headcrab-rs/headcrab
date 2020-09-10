@@ -11,8 +11,6 @@ fn main() {
 #[cfg(target_os = "linux")]
 mod example {
     use std::borrow::Cow;
-    use std::fs::File;
-    use std::io::{prelude::*, BufReader};
     use std::{
         os::unix::ffi::OsStrExt,
         path::{Path, PathBuf},
@@ -549,11 +547,11 @@ mod example {
                     }
 
                     frame.each_argument(&eval_ctx, func as u64, |local| {
-                        show_local("arg", unit, &eval_ctx, local)
+                        show_local("arg", &eval_ctx, local)
                     })?;
 
                     frame.each_local(&eval_ctx, func as u64, |local| {
-                        show_local("    ", unit, &eval_ctx, local)
+                        show_local("    ", &eval_ctx, local)
                     })?;
 
                     frame.print_debuginfo();
@@ -735,14 +733,13 @@ mod example {
 
     fn show_local<'ctx>(
         kind: &str,
-        unit: &gimli::Unit<headcrab::symbol::Reader<'ctx>>,
         eval_ctx: &X86_64EvalContext,
         local: headcrab::symbol::Local<'_, 'ctx>,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let value = match local.value() {
             value @ headcrab::symbol::LocalValue::Pieces(_)
             | value @ headcrab::symbol::LocalValue::Const(_) => {
-                match value.primitive_value(unit, local.type_(), eval_ctx)? {
+                match value.primitive_value(local.type_(), eval_ctx)? {
                     Some(headcrab::symbol::PrimitiveValue::Int { size, signed, data }) => {
                         if signed {
                             (data << (64 - size * 8) >> (64 - size * 8)).to_string()

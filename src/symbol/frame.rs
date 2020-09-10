@@ -152,7 +152,6 @@ pub enum LocalValue<'ctx> {
 impl<'ctx> LocalValue<'ctx> {
     pub fn primitive_value(
         &self,
-        unit: &gimli::Unit<Reader<'ctx>>,
         ty: &gimli::DebuggingInformationEntry<'_, '_, Reader<'ctx>>,
         eval_ctx: &impl super::dwarf_utils::EvalContext,
     ) -> Result<Option<PrimitiveValue>, Box<dyn std::error::Error>> {
