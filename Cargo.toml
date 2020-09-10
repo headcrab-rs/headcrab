@@ -49,5 +49,3 @@ headcrab_inject = { path = "./headcrab_inject" }
 syntax-highlighting = ["syntect"]
 
 [workspace]
-
-

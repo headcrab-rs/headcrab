@@ -27,8 +27,8 @@ mod example {
     use headcrab_inject::{compile_clif_code, DataId, FuncId, InjectionContext};
 
     use repl_tools::HighlightAndComplete;
-    use rustyline::CompletionType;
     use repl_tools::HighlightAndComplete;
+    use rustyline::CompletionType;
     use rustyline::{completion::Pair, CompletionType};
 
     repl_tools::define_repl_cmds!(enum ReplCommand {
