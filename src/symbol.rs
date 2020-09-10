@@ -24,7 +24,7 @@ mod sym;
 
 pub use frame::{Frame, FrameIter, Local, LocalValue};
 pub use relocate::RelocatedDwarf;
-pub use source::DisassemblySource;
+pub use source::{CrabResult, DisassemblySource, Snippet};
 
 macro_rules! dwarf_attr_or_continue {
     (str($dwarf:ident,$unit:ident) $entry:ident.$name:ident) => {

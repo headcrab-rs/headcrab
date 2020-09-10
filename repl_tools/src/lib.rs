@@ -300,8 +300,6 @@ macro_rules! define_repl_cmds {
 
                 Ok((0, vec![]))
             }
-
-            // FIXME forward update to argument completer
         }
     };
 }

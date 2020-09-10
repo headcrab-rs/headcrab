@@ -10,13 +10,16 @@ fn main() {
 
 #[cfg(target_os = "linux")]
 mod example {
+    use std::borrow::Cow;
+    use std::fs::File;
+    use std::io::{prelude::*, BufReader};
     use std::{
         os::unix::ffi::OsStrExt,
         path::{Path, PathBuf},
     };
 
     use headcrab::{
-        symbol::{DisassemblySource, RelocatedDwarf},
+        symbol::{DisassemblySource, RelocatedDwarf, Snippet},
         target::{AttachOptions, LinuxTarget, UnixTarget},
     };
 
@@ -24,7 +27,7 @@ mod example {
     use headcrab_inject::{compile_clif_code, DataId, FuncId, InjectionContext};
 
     use repl_tools::HighlightAndComplete;
-    use rustyline::CompletionType;
+    use rustyline::{completion::Pair, CompletionType};
 
     repl_tools::define_repl_cmds!(enum ReplCommand {
         err = ReplCommandError;
@@ -45,7 +48,7 @@ mod example {
         /// read: List registers and their content for the current stack frame
         Registers|regs: String,
         /// Print backtrace of stack frames
-        Backtrace|bt: String,
+        Backtrace|bt: BacktraceType,
         /// Disassemble some a several instructions starting at the instruction pointer
         Disassemble|dis: (),
         /// Print all local variables of current stack frame
@@ -56,6 +59,8 @@ mod example {
         InjectClif: PathBuf,
         /// Inject a dynamic library and run it's `__headcrab_command` function
         InjectLib: PathBuf,
+        /// Print the source code execution point.
+        List|l: (),
         /// Exit
         Exit|quit|q: (),
     });
@@ -66,6 +71,76 @@ mod example {
         remote: Option<LinuxTarget>,
         debuginfo: Option<RelocatedDwarf>,
         disassembler: DisassemblySource,
+    }
+
+    /// The subcommands that are acceptable for backtrace.
+    enum BacktraceType {
+        // uses the frame_pointer_unwinder.
+        FramePtr,
+
+        // uses naive_unwinder.
+        Naive,
+    }
+
+    #[derive(Debug)]
+    struct BacktraceTypeError(String);
+
+    impl std::fmt::Display for BacktraceTypeError {
+        fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            write!(f, "Unrecognized backtrace type {}. Supported ones are 'fp' and 'naive'. Please consider using one of them.", self.0.trim())
+        }
+    }
+    impl std::error::Error for BacktraceTypeError {}
+
+    impl BacktraceType {
+        #[inline]
+        fn from_str(value: &str) -> Result<Self, BacktraceTypeError> {
+            match value {
+                "fp" | "" => Ok(BacktraceType::FramePtr),
+                "naive" => Ok(BacktraceType::Naive),
+                _ => Err(BacktraceTypeError(value.to_owned()).into()),
+            }
+        }
+    }
+
+    impl Default for BacktraceType {
+        fn default() -> Self {
+            BacktraceType::FramePtr
+        }
+    }
+
+    impl HighlightAndComplete for BacktraceType {
+        type Error = BacktraceTypeError;
+        fn from_str(line: &str) -> Result<Self, Self::Error> {
+            BacktraceType::from_str(line.trim())
+        }
+
+        fn highlight<'l>(line: &'l str) -> Cow<'l, str> {
+            line.into()
+        }
+
+        fn complete(
+            line: &str,
+            pos: usize,
+            ctx: &rustyline::Context<'_>,
+        ) -> rustyline::Result<(usize, Vec<Pair>)> {
+            let pos_first_non_whitespace = line
+                .chars()
+                .position(|c| !c.is_ascii_whitespace())
+                .unwrap_or(0);
+
+            let candidates = ["fp", "naive"]
+                .iter()
+                .filter(|&&cmd| cmd.starts_with(&line.trim_start().to_lowercase()))
+                .map(|cmd| Pair {
+                    display: String::from(*cmd),
+                    replacement: String::from(*cmd) + " ",
+                })
+                .collect::<Vec<_>>();
+
+            let _ = (line, pos, ctx);
+            return Ok((pos_first_non_whitespace, candidates));
+        }
     }
 
     impl Context {
@@ -265,8 +340,16 @@ mod example {
                 context.remote = None;
             }
             ReplCommand::Kill(()) => println!("{:?}", context.remote()?.kill()?),
-            ReplCommand::Stepi(()) => println!("{:?}", context.remote()?.step()?),
-            ReplCommand::Continue(()) => println!("{:?}", context.remote()?.unpause()?),
+            ReplCommand::Stepi(()) => {
+                println!("{:?}", context.remote()?.step()?);
+                return print_source_for_top_of_stack_symbol(context, 3);
+            }
+            ReplCommand::Continue(()) => {
+                println!("{:?}", context.remote()?.unpause()?);
+                // When we hit the next breakpoint, we also want to display the source code
+                // as lldb and gdb does.
+                return print_source_for_top_of_stack_symbol(context, 3);
+            }
             ReplCommand::Registers(sub_cmd) => match &*sub_cmd {
                 "" => Err(format!(
                     "Expected subcommand found nothing. Try `regs read`"
@@ -290,6 +373,9 @@ mod example {
                 let disassembly = context.disassembler.source_snippet(&code, ip, true)?;
                 println!("{}", disassembly);
             }
+            ReplCommand::List(()) => {
+                return print_source_for_top_of_stack_symbol(context, 3);
+            }
             ReplCommand::Locals(()) => {
                 return show_locals(context);
             }
@@ -301,7 +387,6 @@ mod example {
             }
             ReplCommand::Exit(()) => unreachable!("Should be handled earlier"),
         }
-
         Ok(())
     }
 
@@ -344,39 +429,9 @@ mod example {
 
     fn show_backtrace(
         context: &mut Context,
-        sub_cmd: &str,
+        bt_type: &BacktraceType,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        context.load_debuginfo_if_necessary()?;
-
-        let regs = context.remote()?.read_regs()?;
-
-        // Read stack
-        let mut stack: [usize; 1024] = [0; 1024];
-        unsafe {
-            context
-                .remote()?
-                .read()
-                .read(&mut stack, regs.rsp as usize)
-                .apply()?;
-        }
-
-        let call_stack: Vec<_> = match sub_cmd {
-            "" | "fp" => headcrab::symbol::unwind::frame_pointer_unwinder(
-                context.debuginfo(),
-                &stack[..],
-                regs.rip as usize,
-                regs.rsp as usize,
-                regs.rbp as usize,
-            )
-            .collect(),
-            "naive" => headcrab::symbol::unwind::naive_unwinder(
-                context.debuginfo(),
-                &stack[..],
-                regs.rip as usize,
-            )
-            .collect(),
-            _ => Err(format!("Unknown `bt` subcommand `{}`", sub_cmd))?,
-        };
+        let call_stack: Vec<_> = get_call_stack(context, bt_type)?;
         for func in call_stack {
             let res = context
                 .debuginfo()
@@ -515,6 +570,111 @@ mod example {
             Some(false) => {}
         }
 
+        Ok(())
+    }
+
+    fn get_call_stack(
+        context: &mut Context,
+        bt_type: &BacktraceType,
+    ) -> Result<Vec<usize>, Box<dyn std::error::Error>> {
+        context.load_debuginfo_if_necessary()?;
+
+        let regs = context.remote()?.read_regs()?;
+
+        let mut stack: [usize; 1024] = [0; 1024];
+        unsafe {
+            context
+                .remote()?
+                .read()
+                .read(&mut stack, regs.rsp as usize)
+                .apply()?;
+        }
+
+        let call_stack: Vec<_> = match *bt_type {
+            BacktraceType::FramePtr => headcrab::symbol::unwind::frame_pointer_unwinder(
+                context.debuginfo(),
+                &stack[..],
+                regs.rip as usize,
+                regs.rsp as usize,
+                regs.rbp as usize,
+            )
+            .collect(),
+            BacktraceType::Naive => headcrab::symbol::unwind::naive_unwinder(
+                context.debuginfo(),
+                &stack[..],
+                regs.rip as usize,
+            )
+            .collect(),
+        };
+        Ok(call_stack)
+    }
+
+    /// Gets the call_stack from the context and then tries to display the
+    /// source for the top call in the stack. Because the first frame is usually
+    /// sse2.rs, we just display the file and line but not the source and we skip
+    /// over to the next frame. For the next frame, we will display the source code.
+    /// An example view is shown below:
+    ///
+    /// It marks the line with the berakpoint with a '>' character and shows some lines
+    /// of context above and below it.
+    ///
+    /// ```plain
+    /// 0000555555559295 core::core_arch::x86::sse2::_mm_pause /../rustup/toolchains/1.45.2-x86_64-unknown-linux-gnu/../stdarch/crates/core_arch/src/x86/sse2.rs:25
+    /// /workspaces/headcrab/tests/testees/hello.rs:7:14
+    ///    4 #[inline(never)]
+    ///    5 fn breakpoint() {
+    ///    6     // This will be patched by the debugger to be a breakpoint
+    /// >  7     unsafe { core::arch::x86_64::_mm_pause(); }
+    ///    8 }
+    ///    9
+    ///   10 #[inline(never)]
+    /// ```
+    fn print_source_for_top_of_stack_symbol(
+        context: &mut Context,
+        context_lines: usize,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let call_stack = get_call_stack(context, &BacktraceType::default())?;
+        let top_of_stack = call_stack[0];
+        context
+            .debuginfo()
+            .with_addr_frames(top_of_stack, |_addr, mut frames| {
+                while let Some(frame) = frames.next()? {
+                    let name = frame
+                        .function
+                        .as_ref()
+                        .map(|f| Ok(f.demangle()?.into_owned()))
+                        .transpose()
+                        .map_err(|err: gimli::Error| err)?
+                        .unwrap_or_else(|| "<unknown>".to_string());
+
+                    // TODO: currently we are skipping over `_mm_pause` but once we have real
+                    // breakpoint support and `_patch_breakpoint_function` gets removed, this
+                    // must also be removed.
+                    if !name.contains("_mm_pause") {
+                        let (file, line, column) = frame
+                            .location
+                            .as_ref()
+                            .map(|loc| {
+                                (
+                                    loc.file.unwrap_or("<unknown file>"),
+                                    loc.line.unwrap_or(0),
+                                    loc.column.unwrap_or(0),
+                                )
+                            })
+                            .unwrap_or_default();
+                        Snippet::from_file(
+                            file,
+                            name,
+                            line as usize,
+                            context_lines as usize,
+                            column as usize,
+                        )?
+                        .highlight();
+                        break;
+                    }
+                }
+                Ok(())
+            })?;
         Ok(())
     }
 
