@@ -46,6 +46,8 @@ repl_tools = { path = "./repl_tools" }
 headcrab_inject = { path = "./headcrab_inject" }
 
 [features]
+default = ["x86_64"]
+x86_64 = []
 syntax-highlighting = ["syntect"]
 
 [workspace]

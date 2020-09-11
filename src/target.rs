@@ -20,6 +20,10 @@ pub use windows::*;
 
 mod thread;
 
+pub enum Arch {
+    X86_64,
+}
+
 #[derive(Debug)]
 pub struct MemoryMap {
     /// Start and end range of the mapped memory.

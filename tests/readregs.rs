@@ -4,7 +4,7 @@ mod test_utils;
 
 static BIN_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/testees/hello");
 
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(target_os = "linux", feature = "x86_64"))]
 #[test]
 fn read_regs() -> Result<(), Box<dyn std::error::Error>> {
     test_utils::ensure_testees();
