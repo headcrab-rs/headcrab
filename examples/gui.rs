@@ -160,9 +160,7 @@ mod example {
     }
 
     fn render_gui(ui: &imgui::Ui, context: &mut HeadcrabContext) {
-        if context.target_name.to_str() == "" {
-            context.target_name.reserve(100); // FIXME workaround for imgui-rs#366
-        }
+        context.target_name.reserve(100); // FIXME workaround for imgui-rs#366
         imgui::Window::new(im_str!("launch")).build(ui, || {
             ui.input_text(im_str!("target"), &mut context.target_name)
                 .build();

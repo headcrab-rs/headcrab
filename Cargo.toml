@@ -38,12 +38,17 @@ procfs = "0.8.0"
 [target.'cfg(target_os="windows")'.dependencies]
 winapi = { version = "0.3.9", features = ["winuser","processthreadsapi","winbase","minwinbase","debugapi","winnt","memoryapi","dbghelp"] }
 
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+headcrab_inject = { path = "./headcrab_inject" }
+
 [dev-dependencies]
 rustyline = "6.2.0"
 repl_tools = { path = "./repl_tools" }
-
-[target.'cfg(target_os = "linux")'.dev-dependencies]
-headcrab_inject = { path = "./headcrab_inject" }
+imgui = "0.4.0"
+imgui-glium-renderer = "0.4.0"
+imgui-winit-support = "0.4.0"
+glium = "0.27.0"
+clipboard = "0.5.0"
 
 [features]
 syntax-highlighting = ["syntect"]
