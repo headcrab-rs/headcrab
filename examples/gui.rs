@@ -101,11 +101,27 @@ mod example {
 
     #[derive(Default)]
     struct HeadcrabContext {
-        target_name: ImString,
-
         remote: Option<LinuxTarget>,
         debuginfo: Option<RelocatedDwarf>,
         disassembler: DisassemblySource,
+
+        target_name: ImString,
+        backtrace_type: BacktraceType,
+    }
+
+    #[derive(Copy, Clone, PartialEq)]
+    enum BacktraceType {
+        // uses the frame_pointer_unwinder.
+        FramePtr,
+
+        // uses naive_unwinder.
+        Naive,
+    }
+
+    impl Default for BacktraceType {
+        fn default() -> Self {
+            Self::FramePtr
+        }
     }
 
     impl HeadcrabContext {
@@ -142,24 +158,26 @@ mod example {
         imgui::Window::new(im_str!("launch")).build(ui, || {
             ui.input_text(im_str!("target"), &mut context.target_name)
                 .build();
-            ui.group(|| {
-                if let Some(remote) = &context.remote {
-                    if ui.small_button(im_str!("kill")) {
-                        remote.kill().unwrap();
-                        context.remote = None;
-                        return;
-                    }
-                    if ui.arrow_button(im_str!("step"), Direction::Right) {
-                        remote.step().unwrap();
-                    }
-                } else {
-                    if ui.small_button(im_str!("launch")) {
-                        context.set_remote(
-                            LinuxTarget::launch(context.target_name.to_str()).unwrap().0,
-                        );
-                    }
+            if let Some(remote) = &context.remote {
+                if ui.small_button(im_str!("kill")) {
+                    remote.kill().unwrap();
+                    context.remote = None;
+                    return;
                 }
-            });
+                ui.same_line(0.0);
+                if ui.small_button(im_str!("step")) {
+                    remote.step().unwrap();
+                }
+                ui.same_line(0.0);
+                if ui.small_button(im_str!("continue")) {
+                    remote.unpause().unwrap();
+                }
+            } else {
+                if ui.small_button(im_str!("launch")) {
+                    context
+                        .set_remote(LinuxTarget::launch(context.target_name.to_str()).unwrap().0);
+                }
+            }
         });
         if let Some(remote) = &context.remote {
             imgui::Window::new(im_str!("source")).build(ui, || {
@@ -171,6 +189,125 @@ mod example {
                     }
                     let disassembly = context.disassembler.source_snippet(&code, ip, true)?;
                     ui.text(disassembly);
+                    Ok(())
+                })() {
+                    ui.text(format!("{}", err));
+                }
+            });
+            imgui::Window::new(im_str!("backtrace")).build(ui, || {
+                if let Err(err) = (|| -> Result<(), Box<dyn std::error::Error>> {
+                    ui.radio_button(
+                        im_str!("frame-ptr"),
+                        &mut context.backtrace_type,
+                        BacktraceType::FramePtr,
+                    );
+                    ui.same_line(0.0);
+                    ui.radio_button(
+                        im_str!("naive"),
+                        &mut context.backtrace_type,
+                        BacktraceType::Naive,
+                    );
+
+                    context.load_debuginfo_if_necessary()?;
+
+                    let regs = context.remote.as_ref().unwrap().read_regs()?;
+
+                    let mut stack: [usize; 1024] = [0; 1024];
+                    unsafe {
+                        context
+                            .remote
+                            .as_ref()
+                            .unwrap()
+                            .read()
+                            .read(&mut stack, regs.rsp as usize)
+                            .apply()?;
+                    }
+
+                    let call_stack: Vec<_> = match context.backtrace_type {
+                        BacktraceType::FramePtr => {
+                            headcrab::symbol::unwind::frame_pointer_unwinder(
+                                context.debuginfo(),
+                                &stack[..],
+                                regs.rip as usize,
+                                regs.rsp as usize,
+                                regs.rbp as usize,
+                            )
+                            .collect()
+                        }
+                        BacktraceType::Naive => headcrab::symbol::unwind::naive_unwinder(
+                            context.debuginfo(),
+                            &stack[..],
+                            regs.rip as usize,
+                        )
+                        .collect(),
+                    };
+
+                    let mut frames_list = Vec::new();
+                    for func in call_stack {
+                        let res =
+                            context
+                                .debuginfo()
+                                .with_addr_frames(func, |_addr, mut frames| {
+                                    let mut first_frame = true;
+                                    while let Some(frame) = frames.next()? {
+                                        let name = frame
+                                            .function
+                                            .as_ref()
+                                            .map(|f| Ok(f.demangle()?.into_owned()))
+                                            .transpose()
+                                            .map_err(|err: gimli::Error| err)?
+                                            .unwrap_or_else(|| "<unknown>".to_string());
+
+                                        let location = frame
+                                            .location
+                                            .as_ref()
+                                            .map(|loc| {
+                                                format!(
+                                                    "{}:{}",
+                                                    loc.file.unwrap_or("<unknown file>"),
+                                                    loc.line.unwrap_or(0),
+                                                )
+                                            })
+                                            .unwrap_or_default();
+
+                                        if first_frame {
+                                            frames_list.push(format!(
+                                                "{:016x} {} {}",
+                                                func, name, location
+                                            ));
+                                        } else {
+                                            frames_list.push(format!(
+                                                "                 {} {}",
+                                                name, location
+                                            ));
+                                        }
+
+                                        first_frame = false;
+                                    }
+                                    Ok(first_frame)
+                                })?;
+                        match res {
+                            Some(true) | None => {
+                                frames_list.push(format!(
+                                    "{:016x} at {}",
+                                    func,
+                                    context
+                                        .debuginfo()
+                                        .get_address_demangled_name(func)
+                                        .as_deref()
+                                        .unwrap_or("<unknown>")
+                                ));
+                            }
+                            Some(false) => {}
+                        }
+                    }
+                    let frames_list = frames_list
+                        .into_iter()
+                        .map(ImString::from)
+                        .collect::<Vec<_>>();
+                    let frames_list = frames_list.iter().map(|f| &*f).collect::<Vec<_>>();
+                    ui.list_box(im_str!("backtrace"), &mut 0, &*frames_list, 5);
+
                     Ok(())
                 })() {
                     ui.text(format!("{}", err));
