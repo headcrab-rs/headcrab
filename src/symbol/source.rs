@@ -5,8 +5,8 @@ use std::io::{prelude::*, BufReader};
 
 pub struct DisassemblySource(Capstone);
 
-impl DisassemblySource {
-    pub fn new() -> Self {
+impl Default for DisassemblySource {
+    fn default() -> Self {
         use capstone::arch::{BuildsCapstone, BuildsCapstoneSyntax};
 
         let cs = Capstone::new()
@@ -19,7 +19,9 @@ impl DisassemblySource {
 
         DisassemblySource(cs)
     }
+}
 
+impl DisassemblySource {
     pub fn source_snippet(
         &self,
         bytes: &[u8],

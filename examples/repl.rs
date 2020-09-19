@@ -65,6 +65,7 @@ mod example {
 
     type ReplHelper = repl_tools::MakeHelper<ReplCommand>;
 
+    #[derive(Default)]
     struct Context {
         remote: Option<LinuxTarget>,
         debuginfo: Option<RelocatedDwarf>,
@@ -177,11 +178,7 @@ mod example {
         );
         rl.set_helper(Some(ReplHelper::new(true /* color */)));
 
-        let mut context = Context {
-            remote: None,
-            debuginfo: None,
-            disassembler: DisassemblySource::new(),
-        };
+        let mut context = Context::default();
 
         let mut cmds = vec![];
         let mut exec_cmd = None;
