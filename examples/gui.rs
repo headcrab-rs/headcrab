@@ -20,7 +20,7 @@ mod example {
     use headcrab::{
         symbol::DisassemblySource, symbol::RelocatedDwarf, target::LinuxTarget, target::UnixTarget,
     };
-    use imgui::{im_str, ClipboardBackend, Direction, FontConfig, FontSource, ImStr, ImString};
+    use imgui::{im_str, ClipboardBackend, FontConfig, FontSource, ImStr, ImString};
     use imgui_glium_renderer::Renderer;
     use imgui_winit_support::{HiDpiMode, WinitPlatform};
 
@@ -139,10 +139,18 @@ mod example {
             self.debuginfo = None;
         }
 
-        fn load_debuginfo_if_necessary(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        fn reload_debuginfo(&mut self) -> Result<(), Box<dyn std::error::Error>> {
             // FIXME only reload debuginfo when necessary (memory map changed)
             let memory_maps = self.remote()?.memory_maps()?;
             self.debuginfo = Some(RelocatedDwarf::from_maps(&memory_maps)?);
+            Ok(())
+        }
+
+        fn load_debuginfo_if_necessary(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+            if self.debuginfo.is_none() {
+                let memory_maps = self.remote()?.memory_maps()?;
+                self.debuginfo = Some(RelocatedDwarf::from_maps(&memory_maps)?);
+            }
             Ok(())
         }
 
@@ -167,10 +175,20 @@ mod example {
                 ui.same_line(0.0);
                 if ui.small_button(im_str!("step")) {
                     remote.step().unwrap();
+                    // FIXME hack
+                    let memory_maps = remote.memory_maps().unwrap();
+                    context.debuginfo = Some(RelocatedDwarf::from_maps(&memory_maps).unwrap());
                 }
                 ui.same_line(0.0);
                 if ui.small_button(im_str!("continue")) {
                     remote.unpause().unwrap();
+                    // FIXME hack
+                    let memory_maps = remote.memory_maps().unwrap();
+                    context.debuginfo = Some(RelocatedDwarf::from_maps(&memory_maps).unwrap());
+                }
+                ui.same_line(0.0);
+                if ui.small_button(im_str!("pbf")) {
+                    patch_breakpoint_function(context).unwrap();
                 }
             } else {
                 if ui.small_button(im_str!("launch")) {
@@ -306,7 +324,7 @@ mod example {
                         .map(ImString::from)
                         .collect::<Vec<_>>();
                     let frames_list = frames_list.iter().map(|f| &*f).collect::<Vec<_>>();
-                    ui.list_box(im_str!("backtrace"), &mut 0, &*frames_list, 5);
+                    ui.list_box(im_str!("backtrace"), &mut 0, &*frames_list, frames_list.len() as i32);
 
                     Ok(())
                 })() {
@@ -314,5 +332,42 @@ mod example {
                 }
             });
         }
+    }
+
+    /// Patch the `pause` instruction inside a function called `breakpoint` to be a
+    /// breakpoint. This is useful while we don't have support for setting breakpoints at
+    /// runtime yet.
+    /// FIXME remove once real breakpoint support is added
+    fn patch_breakpoint_function(context: &mut HeadcrabContext) -> Result<(), Box<dyn std::error::Error>> {
+        context.load_debuginfo_if_necessary()?;
+        // Test that `a_function` resolves to a function.
+        let breakpoint_addr = context.debuginfo().get_symbol_address("breakpoint").unwrap() + 4 /* prologue */;
+        // Write breakpoint to the `breakpoint` function.
+        let mut pause_inst = 0 as libc::c_ulong;
+        unsafe {
+            context
+                .remote()?
+                .read()
+                .read(&mut pause_inst, breakpoint_addr)
+                .apply()
+                .unwrap();
+        }
+        // pause (rep nop); ...
+        assert_eq!(
+            &pause_inst.to_ne_bytes()[0..2],
+            &[0xf3, 0x90],
+            "Pause instruction not found"
+        );
+        let mut breakpoint_inst = pause_inst.to_ne_bytes();
+        // int3; nop; ...
+        breakpoint_inst[0] = 0xcc;
+        nix::sys::ptrace::write(
+            context.remote()?.pid(),
+            breakpoint_addr as *mut _,
+            libc::c_ulong::from_ne_bytes(breakpoint_inst) as *mut _,
+        )
+        .unwrap();
+
+        Ok(())
     }
 }
