@@ -5,7 +5,7 @@ use super::Reader;
 macro_rules! dwarf_attr {
     (str($dwarf:ident,$unit:ident) $entry:ident.$name:ident || $missing:ident) => {
         if let Some(attr) = $entry.attr(gimli::$name)? {
-            dwarf_attr_not_missing_action!($missing, $dwarf.attr_string(&$unit, attr.value())?)
+            dwarf_attr_exists_action_action!($missing, $dwarf.attr_string(&$unit, attr.value())?)
         } else {
             dwarf_attr_missing_action!($missing, $name)
         }
@@ -14,7 +14,7 @@ macro_rules! dwarf_attr {
         if let Some(attr) = $entry.attr(gimli::$name)? {
             match attr.value() {
                 gimli::AttributeValue::UnitRef(unit_ref) => {
-                    dwarf_attr_not_missing_action!($missing, unit_ref)
+                    dwarf_attr_exists_action_action!($missing, unit_ref)
                 }
                 val => {
                     return Err(format!(
@@ -31,7 +31,7 @@ macro_rules! dwarf_attr {
     };
     (udata $entry:ident.$name:ident || $missing:ident) => {
         if let Some(attr) = $entry.attr(gimli::$name)? {
-            dwarf_attr_not_missing_action!(
+            dwarf_attr_exists_action_action!(
                 $missing,
                 attr.udata_value()
                     .ok_or(concat!("invalid value for", stringify!($name)))?
@@ -44,7 +44,7 @@ macro_rules! dwarf_attr {
         if let Some(attr) = $entry.attr(gimli::$name)? {
             match attr.value() {
                 gimli::AttributeValue::Encoding(encoding) => {
-                    dwarf_attr_not_missing_action!($missing, encoding)
+                    dwarf_attr_exists_action_action!($missing, encoding)
                 }
                 encoding => {
                     return Err(
@@ -58,14 +58,14 @@ macro_rules! dwarf_attr {
     };
     ($entry:ident.$name:ident || $missing:ident) => {
         if let Some(attr) = $entry.attr(gimli::$name)? {
-            dwarf_attr_not_missing_action!($missing, attr)
+            dwarf_attr_exists_action_action!($missing, attr)
         } else {
             dwarf_attr_missing_action!($missing, $name)
         }
     };
 }
 
-macro_rules! dwarf_attr_not_missing_action {
+macro_rules! dwarf_attr_exists_action_action {
     (continue, $val:expr) => {
         $val
     };
