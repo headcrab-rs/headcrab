@@ -11,8 +11,6 @@ fn main() {
 #[cfg(target_os = "linux")]
 mod example {
     use std::borrow::Cow;
-    use std::fs::File;
-    use std::io::{prelude::*, BufReader};
     use std::{
         os::unix::ffi::OsStrExt,
         path::{Path, PathBuf},
@@ -524,36 +522,36 @@ mod example {
                         .function_debuginfo()
                         .ok_or_else(|| "No dwarf debuginfo for function".to_owned())?;
 
+                    let mut eval_ctx = X86_64EvalContext {
+                        frame_base: None,
+                        regs,
+                    };
+
                     // FIXME handle DW_TAG_inlined_subroutine with DW_AT_frame_base in parent DW_TAG_subprogram
-                    let frame_base = if let Some(frame_base) =
+                    if let Some(frame_base) =
                         unit.entry(dw_die_offset)?.attr(gimli::DW_AT_frame_base)?
                     {
                         let frame_base = frame_base.exprloc_value().unwrap();
                         let res = headcrab::symbol::dwarf_utils::evaluate_expression(
-                            unit,
-                            frame_base,
-                            None,
-                            get_linux_x86_64_reg(regs),
+                            unit, frame_base, &eval_ctx,
                         )?;
                         assert_eq!(res.len(), 1);
                         assert_eq!(res[0].bit_offset, None);
                         assert_eq!(res[0].size_in_bits, None);
-                        Some(match res[0].location {
+                        match res[0].location {
                             gimli::Location::Register {
                                 register: gimli::X86_64::RBP,
-                            } => regs.rbp,
+                            } => eval_ctx.frame_base = Some(regs.rbp),
                             ref loc => unimplemented!("{:?}", loc), // FIXME
-                        })
-                    } else {
-                        None
-                    };
+                        }
+                    }
 
-                    frame.each_argument::<Box<dyn std::error::Error>, _>(func as u64, |local| {
-                        show_local("arg", context, unit, frame_base, regs, local)
+                    frame.each_argument(&eval_ctx, func as u64, |local| {
+                        show_local("arg", &eval_ctx, local)
                     })?;
 
-                    frame.each_local::<Box<dyn std::error::Error>, _>(func as u64, |local| {
-                        show_local("    ", context, unit, frame_base, regs, local)
+                    frame.each_local(&eval_ctx, func as u64, |local| {
+                        show_local("    ", &eval_ctx, local)
                     })?;
 
                     frame.print_debuginfo();
@@ -708,62 +706,57 @@ mod example {
         }
     }
 
-    fn show_local<'a>(
-        kind: &str,
-        context: &Context,
-        unit: &gimli::Unit<headcrab::symbol::Reader<'a>>,
+    struct X86_64EvalContext {
         frame_base: Option<u64>,
         regs: libc::user_regs_struct,
-        local: headcrab::symbol::Local,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        let type_size = if let Some(type_) = local.type_() {
-            if let Some(size) = type_.attr(gimli::DW_AT_byte_size)? {
-                size.udata_value().unwrap()
-            } else if type_.tag() == gimli::DW_TAG_pointer_type {
-                std::mem::size_of::<usize>() as u64 // FIXME use pointer size of remote
-            } else {
-                0
-            }
-        } else {
-            0
-        };
+    }
 
+    impl headcrab::symbol::dwarf_utils::EvalContext for X86_64EvalContext {
+        fn frame_base(&self) -> u64 {
+            self.frame_base.unwrap()
+        }
+
+        fn register(&self, register: gimli::Register, base_type: gimli::ValueType) -> gimli::Value {
+            get_linux_x86_64_reg(self.regs)(register, base_type)
+        }
+
+        fn memory(
+            &self,
+            _address: u64,
+            _size: u8,
+            _address_space: Option<u64>,
+            _base_type: gimli::ValueType,
+        ) -> gimli::Value {
+            todo!()
+        }
+    }
+
+    fn show_local<'ctx>(
+        kind: &str,
+        eval_ctx: &X86_64EvalContext,
+        local: headcrab::symbol::Local<'_, 'ctx>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let value = match local.value() {
-            headcrab::symbol::LocalValue::Expr(expr) => {
-                let res = headcrab::symbol::dwarf_utils::evaluate_expression(
-                    unit,
-                    expr.clone(),
-                    frame_base,
-                    get_linux_x86_64_reg(regs),
-                )?;
-                assert_eq!(res.len(), 1);
-                assert_eq!(res[0].bit_offset, None);
-                assert_eq!(res[0].size_in_bits, None);
-                match res[0].location {
-                    gimli::Location::Address { address } => match type_size {
-                        8 => {
-                            let mut val = 0u64;
-                            unsafe {
-                                context
-                                    .remote()
-                                    .unwrap()
-                                    .read()
-                                    .read(&mut val, address as usize)
-                                    .apply()
-                                    .unwrap();
-                            }
-                            format!("{}", val)
+            value @ headcrab::symbol::LocalValue::Pieces(_)
+            | value @ headcrab::symbol::LocalValue::Const(_) => {
+                match value.primitive_value(local.type_(), eval_ctx)? {
+                    Some(headcrab::symbol::PrimitiveValue::Int { size, signed, data }) => {
+                        if signed {
+                            (data << (64 - size * 8) >> (64 - size * 8)).to_string()
+                        } else {
+                            ((data as i64) << (64 - size * 8) >> (64 - size * 8)).to_string()
                         }
-                        _ => unimplemented!("{}", type_size),
-                    },
-                    gimli::Location::Value { value } => match value {
-                        gimli::Value::Generic(val) => format!("{}", val),
-                        val => unimplemented!("{:?}", val),
-                    },
-                    ref loc => unimplemented!("{:?}", loc),
+                    }
+                    Some(headcrab::symbol::PrimitiveValue::Float { is_64, data }) => {
+                        if is_64 {
+                            f64::from_bits(data).to_string()
+                        } else {
+                            f32::from_bits(data as u32).to_string()
+                        }
+                    }
+                    None => "<struct>".to_owned(),
                 }
             }
-            headcrab::symbol::LocalValue::Const(val) => format!("const {}", val),
             headcrab::symbol::LocalValue::OptimizedOut => "<optimized out>".to_owned(),
             headcrab::symbol::LocalValue::Unknown => "<unknown>".to_owned(),
         };

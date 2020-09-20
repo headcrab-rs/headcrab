@@ -1,3 +1,4 @@
+use std::convert::TryFrom;
 use std::fmt;
 
 use super::dwarf_utils::SearchAction;
@@ -57,13 +58,14 @@ impl<'a> Frame<'a> {
     }
 
     pub fn each_argument<
-        E: From<gimli::Error> + From<String>,
-        F: Fn(Local<'_, 'a>) -> Result<(), E>,
+        C: super::dwarf_utils::EvalContext,
+        F: Fn(Local<'_, 'a>) -> Result<(), Box<dyn std::error::Error>>,
     >(
         &self,
+        eval_ctx: &C,
         addr: u64,
         f: F,
-    ) -> Result<(), E> {
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let (dwarf, unit, dw_die_offset) = self
             .function_debuginfo()
             .ok_or_else(|| "No dwarf debuginfo for function".to_owned())?;
@@ -74,7 +76,7 @@ impl<'a> Frame<'a> {
             }
 
             if entry.tag() == gimli::DW_TAG_formal_parameter {
-                f(Local::from_entry::<E>(dwarf, unit, entry, addr)?)?;
+                f(Local::from_entry(dwarf, unit, entry, eval_ctx, addr)?)?;
             }
 
             Ok(SearchAction::SkipChildren)
@@ -83,13 +85,14 @@ impl<'a> Frame<'a> {
     }
 
     pub fn each_local<
-        E: From<gimli::Error> + From<String>,
-        F: Fn(Local<'_, 'a>) -> Result<(), E>,
+        C: super::dwarf_utils::EvalContext,
+        F: Fn(Local<'_, 'a>) -> Result<(), Box<dyn std::error::Error>>,
     >(
         &self,
+        eval_ctx: &C,
         addr: u64,
         f: F,
-    ) -> Result<(), E> {
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let (dwarf, unit, dw_die_offset) = self
             .function_debuginfo()
             .ok_or_else(|| "No dwarf debuginfo for function".to_owned())?;
@@ -105,7 +108,7 @@ impl<'a> Frame<'a> {
             }
 
             if entry.tag() == gimli::DW_TAG_variable {
-                f(Local::from_entry::<E>(dwarf, unit, entry, addr)?)?;
+                f(Local::from_entry(dwarf, unit, entry, eval_ctx, addr)?)?;
             }
 
             Ok(SearchAction::VisitChildren)
@@ -116,7 +119,7 @@ impl<'a> Frame<'a> {
 
 pub struct Local<'a, 'ctx> {
     name: Option<Reader<'ctx>>,
-    type_: Option<gimli::DebuggingInformationEntry<'a, 'a, Reader<'ctx>>>,
+    type_: gimli::DebuggingInformationEntry<'a, 'a, Reader<'ctx>>,
     value: LocalValue<'ctx>,
 }
 
@@ -138,31 +141,124 @@ impl fmt::Debug for Local<'_, '_> {
     }
 }
 
+#[derive(Debug)]
 pub enum LocalValue<'ctx> {
-    Expr(gimli::Expression<Reader<'ctx>>),
+    Pieces(Vec<gimli::Piece<Reader<'ctx>>>),
     Const(u64),
     OptimizedOut,
     Unknown,
 }
 
-impl fmt::Debug for LocalValue<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            LocalValue::Expr(expr) => write!(f, "Expr({:?})", expr.0.to_slice()),
-            LocalValue::Const(c) => write!(f, "Const({})", c),
-            LocalValue::OptimizedOut => f.write_str("OptimizedOut"),
-            LocalValue::Unknown => f.write_str("Unknown"),
+impl<'ctx> LocalValue<'ctx> {
+    pub fn primitive_value(
+        &self,
+        ty: &gimli::DebuggingInformationEntry<'_, '_, Reader<'ctx>>,
+        eval_ctx: &impl super::dwarf_utils::EvalContext,
+    ) -> Result<Option<PrimitiveValue>, Box<dyn std::error::Error>> {
+        match ty.tag() {
+            gimli::DW_TAG_base_type => {
+                let size = dwarf_attr!(udata ty.DW_AT_byte_size || error);
+                let encoding = dwarf_attr!(encoding ty.DW_AT_encoding || error);
+                match encoding {
+                    gimli::DW_ATE_unsigned | gimli::DW_ATE_signed => {
+                        let size = u8::try_from(size).map_err(|_| {
+                            format!("`{}` is too big for DW_ATE_unsigned or DW_ATE_signed", size,)
+                        })?;
+                        let data = match self {
+                            LocalValue::Pieces(pieces) => {
+                                if pieces.len() != 1 {
+                                    return Err("too many pieces for an integer value".into());
+                                }
+
+                                if pieces[0].size_in_bits.is_none()
+                                    || pieces[0].size_in_bits.unwrap() == u64::from(size) * 8
+                                {
+                                } else {
+                                    return Err(
+                                        format!("wrong size for piece {:?}", pieces[0]).into()
+                                    );
+                                }
+                                // FIXME handle this
+                                assert!(
+                                    pieces[0].bit_offset.is_none(),
+                                    "unhandled bit_offset for piece {:?}",
+                                    pieces[0]
+                                );
+
+                                let value = match &pieces[0].location {
+                                    gimli::Location::Empty => {
+                                        return Err("found empty piece for an integer value".into())
+                                    }
+                                    gimli::Location::Register { register } => {
+                                        eval_ctx.register(
+                                            *register,
+                                            gimli::ValueType::Generic, /* FIXME */
+                                        )
+                                    }
+                                    gimli::Location::Address { address } => eval_ctx.memory(
+                                        *address,
+                                        size,
+                                        None,
+                                        gimli::ValueType::Generic, /* FIXME */
+                                    ),
+                                    gimli::Location::Value { value } => *value,
+                                    gimli::Location::Bytes { value: _ } => todo!(),
+                                    gimli::Location::ImplicitPointer {
+                                        value: _,
+                                        byte_offset: _,
+                                    } => {
+                                        return Err(
+                                            "found implicit pointer for an integer value".into()
+                                        )
+                                    }
+                                };
+                                match value {
+                                    gimli::Value::Generic(data) => data,
+                                    gimli::Value::I8(data) => data as u64,
+                                    gimli::Value::U8(data) => data as u64,
+                                    gimli::Value::I16(data) => data as u64,
+                                    gimli::Value::U16(data) => data as u64,
+                                    gimli::Value::I32(data) => data as u64,
+                                    gimli::Value::U32(data) => data as u64,
+                                    gimli::Value::I64(data) => data as u64,
+                                    gimli::Value::U64(data) => data,
+                                    gimli::Value::F32(_) | gimli::Value::F64(_) => {
+                                        return Err("found float piece for an integer value".into())
+                                    }
+                                }
+                            }
+                            LocalValue::Const(data) => *data,
+                            LocalValue::OptimizedOut => return Ok(None),
+                            LocalValue::Unknown => return Ok(None),
+                        };
+                        Ok(Some(PrimitiveValue::Int {
+                            size,
+                            signed: encoding == gimli::DW_ATE_signed,
+                            data,
+                        }))
+                    }
+                    _ => todo!("{:?}", encoding),
+                }
+            }
+            gimli::DW_TAG_structure_type => Ok(None),
+            tag => todo!("{:?}", tag),
         }
     }
 }
 
+pub enum PrimitiveValue {
+    Int { size: u8, signed: bool, data: u64 },
+    Float { is_64: bool, data: u64 },
+}
+
 impl<'a, 'ctx> Local<'a, 'ctx> {
-    pub fn from_entry<E: From<gimli::Error> + From<String>>(
+    pub fn from_entry<C: super::dwarf_utils::EvalContext>(
         dwarf: &'a gimli::Dwarf<Reader<'ctx>>,
         unit: &'a gimli::Unit<Reader<'ctx>>,
         entry: gimli::DebuggingInformationEntry<'a, 'a, Reader<'ctx>>,
+        eval_ctx: &C,
         addr: u64,
-    ) -> Result<Self, E> {
+    ) -> Result<Self, Box<dyn std::error::Error>> {
         let origin_entry = if let Some(origin) = entry.attr(gimli::DW_AT_abstract_origin)? {
             let origin = match origin.value() {
                 gimli::AttributeValue::UnitRef(offset) => offset,
@@ -173,30 +269,16 @@ impl<'a, 'ctx> Local<'a, 'ctx> {
             entry.clone()
         };
 
-        let name = origin_entry
-            .attr(gimli::DW_AT_name)?
-            .map(|name| {
-                name.string_value(&dwarf.debug_str)
-                    .ok_or_else(|| "Local name not a string".to_owned())
-            })
-            .transpose()?;
+        let name = dwarf_attr!(str(dwarf,unit) origin_entry.DW_AT_name || None);
 
-        let type_ = origin_entry
-            .attr(gimli::DW_AT_type)?
-            .map(|attr| match attr.value() {
-                gimli::AttributeValue::UnitRef(type_) => Ok(type_),
-                val => Err(format!(
-                    "`{:?}` is not a valid value for a DW_AT_type attribute",
-                    val
-                )),
-            })
-            .transpose()?
-            .map(|type_| unit.entry(type_))
-            .transpose()?;
+        let type_ = unit.entry(dwarf_attr!(unit_ref origin_entry.DW_AT_type || error))?;
 
         let value = if let Some(loc) = entry.attr(gimli::DW_AT_location)? {
             match loc.value() {
-                gimli::AttributeValue::Exprloc(loc) => LocalValue::Expr(loc),
+                gimli::AttributeValue::Exprloc(loc) => {
+                    let pieces = super::dwarf_utils::evaluate_expression(unit, loc, eval_ctx)?;
+                    LocalValue::Pieces(pieces)
+                }
                 gimli::AttributeValue::LocationListsRef(loc_list) => {
                     let mut loc_list = dwarf.locations(unit, loc_list)?;
                     let mut loc = None;
@@ -207,15 +289,16 @@ impl<'a, 'ctx> Local<'a, 'ctx> {
                         }
                     }
                     if let Some(loc) = loc {
-                        LocalValue::Expr(loc)
+                        let pieces = super::dwarf_utils::evaluate_expression(unit, loc, eval_ctx)?;
+                        LocalValue::Pieces(pieces)
                     } else {
                         LocalValue::OptimizedOut
                     }
                 }
                 val => unreachable!("{:?}", val),
             }
-        } else if let Some(const_val) = entry.attr(gimli::DW_AT_const_value)? {
-            LocalValue::Const(const_val.udata_value().unwrap())
+        } else if let Some(const_val) = dwarf_attr!(udata entry.DW_AT_const_value || None) {
+            LocalValue::Const(const_val)
         } else {
             LocalValue::Unknown
         };
@@ -230,8 +313,8 @@ impl<'a, 'ctx> Local<'a, 'ctx> {
             .transpose()
     }
 
-    pub fn type_(&'a self) -> Option<&'a gimli::DebuggingInformationEntry<'a, 'a, Reader<'ctx>>> {
-        self.type_.as_ref()
+    pub fn type_(&'a self) -> &'a gimli::DebuggingInformationEntry<'a, 'a, Reader<'ctx>> {
+        &self.type_
     }
 
     pub fn value(&'a self) -> &'a LocalValue<'ctx> {

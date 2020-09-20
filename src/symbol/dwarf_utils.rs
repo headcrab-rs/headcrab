@@ -1,6 +1,93 @@
-use gimli::{DebuggingInformationEntry, Dwarf, Unit};
+use gimli::{DebuggingInformationEntry, Dwarf, Unit, UnitOffset, ValueType};
 
 use super::Reader;
+
+macro_rules! dwarf_attr {
+    (str($dwarf:ident,$unit:ident) $entry:ident.$name:ident || $missing:ident) => {
+        if let Some(attr) = $entry.attr(gimli::$name)? {
+            dwarf_attr_exists_action_action!($missing, $dwarf.attr_string(&$unit, attr.value())?)
+        } else {
+            dwarf_attr_missing_action!($missing, $name)
+        }
+    };
+    (unit_ref $entry:ident.$name:ident || $missing:ident) => {
+        if let Some(attr) = $entry.attr(gimli::$name)? {
+            match attr.value() {
+                gimli::AttributeValue::UnitRef(unit_ref) => {
+                    dwarf_attr_exists_action_action!($missing, unit_ref)
+                }
+                val => {
+                    return Err(format!(
+                        "`{:?}` is not a valid value for a {} attribute",
+                        val,
+                        gimli::$name,
+                    )
+                    .into())
+                }
+            }
+        } else {
+            dwarf_attr_missing_action!($missing, $name)
+        }
+    };
+    (udata $entry:ident.$name:ident || $missing:ident) => {
+        if let Some(attr) = $entry.attr(gimli::$name)? {
+            dwarf_attr_exists_action_action!(
+                $missing,
+                attr.udata_value()
+                    .ok_or(concat!("invalid value for", stringify!($name)))?
+            )
+        } else {
+            dwarf_attr_missing_action!($missing, $name)
+        }
+    };
+    (encoding $entry:ident.$name:ident || $missing:ident) => {
+        if let Some(attr) = $entry.attr(gimli::$name)? {
+            match attr.value() {
+                gimli::AttributeValue::Encoding(encoding) => {
+                    dwarf_attr_exists_action_action!($missing, encoding)
+                }
+                encoding => {
+                    return Err(
+                        format!("invalid value for {}: {:?}", gimli::$name, encoding).into(),
+                    )
+                }
+            }
+        } else {
+            dwarf_attr_missing_action!($missing, $name)
+        }
+    };
+    ($entry:ident.$name:ident || $missing:ident) => {
+        if let Some(attr) = $entry.attr(gimli::$name)? {
+            dwarf_attr_exists_action_action!($missing, attr)
+        } else {
+            dwarf_attr_missing_action!($missing, $name)
+        }
+    };
+}
+
+macro_rules! dwarf_attr_exists_action_action {
+    (continue, $val:expr) => {
+        $val
+    };
+    (error, $val:expr) => {
+        $val
+    };
+    (None, $val:expr) => {
+        Some($val)
+    };
+}
+
+macro_rules! dwarf_attr_missing_action {
+    (continue, $name:ident) => {
+        continue;
+    };
+    (error, $name:ident) => {
+        return Err(concat!("missing ", stringify!($name), " attribute").into());
+    };
+    (None, $name:ident) => {
+        None
+    };
+}
 
 pub fn in_range(
     dwarf: &Dwarf<Reader>,
@@ -36,7 +123,7 @@ pub enum SearchAction<T> {
 
 pub fn search_tree<'a, 'dwarf, 'unit: 'dwarf, T, E: From<gimli::Error>>(
     unit: &'unit Unit<Reader<'a>>,
-    offset: Option<gimli::UnitOffset>,
+    offset: Option<UnitOffset>,
     mut f: impl FnMut(
         DebuggingInformationEntry<'dwarf, 'unit, Reader<'a>>,
         usize,
@@ -73,11 +160,34 @@ pub fn search_tree<'a, 'dwarf, 'unit: 'dwarf, T, E: From<gimli::Error>>(
     process_tree(unit, entries_tree.root()?, 0, &mut f)
 }
 
+pub trait EvalContext {
+    fn frame_base(&self) -> u64;
+    fn register(&self, register: gimli::Register, base_type: ValueType) -> gimli::Value;
+    fn memory(
+        &self,
+        address: u64,
+        size: u8,
+        address_space: Option<u64>,
+        base_type: ValueType,
+    ) -> gimli::Value;
+}
+
+fn value_type_from_base_type(
+    unit: &Unit<Reader<'_>>,
+    base_type: UnitOffset,
+) -> Result<ValueType, Box<dyn std::error::Error>> {
+    if base_type.0 == 0 {
+        Ok(ValueType::Generic)
+    } else {
+        let base_type_die = unit.entry(base_type)?;
+        Ok(ValueType::from_entry(&base_type_die)?.ok_or_else(|| "not a base type".to_owned())?)
+    }
+}
+
 pub fn evaluate_expression<'a>(
     unit: &gimli::Unit<Reader<'a>>,
     expr: gimli::Expression<Reader<'a>>,
-    frame_base: Option<u64>,
-    get_reg: impl Fn(gimli::Register, gimli::ValueType) -> gimli::Value,
+    eval_ctx: &impl EvalContext,
 ) -> Result<Vec<gimli::Piece<Reader<'a>>>, Box<dyn std::error::Error>> {
     let mut eval = expr.evaluation(unit.encoding());
     let mut res = eval.evaluate()?;
@@ -87,26 +197,39 @@ pub fn evaluate_expression<'a>(
                 return Ok(eval.result());
             }
             gimli::EvaluationResult::RequiresFrameBase => {
-                res = eval.resume_with_frame_base(
-                    frame_base.ok_or_else(|| "No frame base".to_owned())?,
-                )?;
+                res = eval.resume_with_frame_base(eval_ctx.frame_base())?;
             }
             gimli::EvaluationResult::RequiresRegister {
                 register,
                 base_type,
             } => {
-                let ty = if base_type.0 == 0 {
-                    gimli::ValueType::Generic
-                } else {
-                    let base_type_die = unit.entry(base_type)?;
-                    gimli::ValueType::from_entry(&base_type_die)?
-                        .ok_or_else(|| "not a base type".to_owned())?
-                };
-
-                let val = get_reg(register, ty);
-                res = eval.resume_with_register(val)?;
+                let ty = value_type_from_base_type(unit, base_type)?;
+                res = eval.resume_with_register(eval_ctx.register(register, ty))?;
             }
-            res => unimplemented!("{:?}", res),
+            gimli::EvaluationResult::RequiresMemory {
+                address,
+                size,
+                space,
+                base_type,
+            } => {
+                let ty = value_type_from_base_type(unit, base_type)?;
+                res = eval.resume_with_memory(eval_ctx.memory(address, size, space, ty))?;
+            }
+            gimli::EvaluationResult::RequiresTls(_addr) => todo!("TLS"),
+            gimli::EvaluationResult::RequiresCallFrameCfa => todo!("CFA"),
+            gimli::EvaluationResult::RequiresAtLocation(_expr_ref) => todo!("at location"),
+            gimli::EvaluationResult::RequiresEntryValue(_expr) => {
+                // FIXME implement this
+                // See https://github.com/llvm/llvm-project/blob/895337647896edefda244c7afc4b71eab41ff850/lldb/source/Expression/DWARFExpression.cpp#L645-L687
+                todo!("entry value");
+            }
+            gimli::EvaluationResult::RequiresParameterRef(_param_ref) => todo!("parameter ref"),
+            gimli::EvaluationResult::RequiresRelocatedAddress(_addr) => todo!("relocated address"),
+            gimli::EvaluationResult::RequiresIndexedAddress {
+                index: _,
+                relocate: _,
+            } => todo!("indexed address"),
+            gimli::EvaluationResult::RequiresBaseType(_base_type) => todo!("base type"),
         }
     }
 }

@@ -73,8 +73,10 @@ fn read_locals() -> Result<(), Box<dyn std::error::Error>> {
                     let res = headcrab::symbol::dwarf_utils::evaluate_expression(
                         unit,
                         frame_base,
-                        None,
-                        get_linux_x86_64_reg(regs),
+                        &X86_64EvalContext {
+                            frame_base: None,
+                            regs,
+                        },
                     )?;
                     assert_eq!(res.len(), 1);
                     assert_eq!(res[0].bit_offset, None);
@@ -89,27 +91,23 @@ fn read_locals() -> Result<(), Box<dyn std::error::Error>> {
                     None
                 };
 
-                frame.each_argument::<Box<dyn std::error::Error>, _>(ip as u64, |local| {
+                let eval_ctx = X86_64EvalContext { frame_base, regs };
+
+                frame.each_argument(&eval_ctx, ip as u64, |local| {
                     panic!("Main should not have any arguments, but it has {:?}", local);
                 })?;
 
-                frame.each_local::<Box<dyn std::error::Error>, _>(ip as u64, |local| {
+                frame.each_local(&eval_ctx, ip as u64, |local| {
                     match local.name().unwrap().unwrap() {
                         "var" => {
-                            let expr = match local.value() {
-                                LocalValue::Expr(expr) => expr,
+                            let pieces = match local.value() {
+                                LocalValue::Pieces(pieces) => pieces,
                                 value => panic!("{:?}", value),
                             };
-                            let res = headcrab::symbol::dwarf_utils::evaluate_expression(
-                                unit,
-                                expr.clone(),
-                                frame_base,
-                                get_linux_x86_64_reg(regs),
-                            )?;
-                            assert_eq!(res.len(), 1);
-                            assert_eq!(res[0].bit_offset, None);
-                            assert_eq!(res[0].size_in_bits, None);
-                            match res[0].location {
+                            assert_eq!(pieces.len(), 1);
+                            assert_eq!(pieces[0].bit_offset, None);
+                            assert_eq!(pieces[0].size_in_bits, None);
+                            match pieces[0].location {
                                 gimli::Location::Value { value } => match value {
                                     gimli::Value::Generic(val) => assert_eq!(val, 42),
                                     val => panic!("{:?}", val),
@@ -119,6 +117,10 @@ fn read_locals() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         "reg_var" => match local.value() {
                             LocalValue::Const(43) => {}
+                            val => panic!("{:?}", val),
+                        },
+                        "a" => match local.value() {
+                            LocalValue::Pieces(_) => {}
                             val => panic!("{:?}", val),
                         },
                         name => panic!("{}", name),
@@ -134,6 +136,33 @@ fn read_locals() -> Result<(), Box<dyn std::error::Error>> {
     test_utils::continue_to_end(&target);
 
     Ok(())
+}
+
+#[cfg(target_os = "linux")]
+struct X86_64EvalContext {
+    frame_base: Option<u64>,
+    regs: libc::user_regs_struct,
+}
+
+#[cfg(target_os = "linux")]
+impl headcrab::symbol::dwarf_utils::EvalContext for X86_64EvalContext {
+    fn frame_base(&self) -> u64 {
+        self.frame_base.unwrap()
+    }
+
+    fn register(&self, register: gimli::Register, base_type: gimli::ValueType) -> gimli::Value {
+        get_linux_x86_64_reg(self.regs)(register, base_type)
+    }
+
+    fn memory(
+        &self,
+        _address: u64,
+        _size: u8,
+        _address_space: Option<u64>,
+        _base_type: gimli::ValueType,
+    ) -> gimli::Value {
+        todo!()
+    }
 }
 
 #[cfg(target_os = "linux")]
