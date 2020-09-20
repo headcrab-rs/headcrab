@@ -119,6 +119,10 @@ fn read_locals() -> Result<(), Box<dyn std::error::Error>> {
                             LocalValue::Const(43) => {}
                             val => panic!("{:?}", val),
                         },
+                        "a" => match local.value() {
+                            LocalValue::Pieces(_) => {}
+                            val => panic!("{:?}", val),
+                        },
                         name => panic!("{}", name),
                     }
 
