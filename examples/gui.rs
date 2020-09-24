@@ -14,13 +14,14 @@ mod example {
 
     use clipboard::{ClipboardContext, ClipboardProvider};
     use glium::{
-        glutin::event::Event, glutin::event::WindowEvent, glutin::event_loop::ControlFlow,
-        glutin::event_loop::EventLoop, glutin::window::WindowBuilder, Display, Surface,
+        glutin::dpi::LogicalSize, glutin::event::Event, glutin::event::WindowEvent,
+        glutin::event_loop::ControlFlow, glutin::event_loop::EventLoop,
+        glutin::window::WindowBuilder, Display, Surface,
     };
     use headcrab::{
         symbol::DisassemblySource, symbol::RelocatedDwarf, target::LinuxTarget, target::UnixTarget,
     };
-    use imgui::{im_str, ClipboardBackend, FontConfig, FontSource, ImStr, ImString};
+    use imgui::{im_str, ClipboardBackend, Condition, FontConfig, FontSource, ImStr, ImString};
     use imgui_glium_renderer::Renderer;
     use imgui_winit_support::{HiDpiMode, WinitPlatform};
 
@@ -41,7 +42,9 @@ mod example {
 
         let event_loop = EventLoop::new();
         let context = glium::glutin::ContextBuilder::new().with_vsync(true);
-        let builder = WindowBuilder::new().with_title("Headcrab");
+        let builder = WindowBuilder::new()
+            .with_title("Headcrab")
+            .with_inner_size(LogicalSize::new(800, 400));
         let display = Display::new(builder, context, &event_loop).unwrap();
 
         let mut platform = WinitPlatform::init(&mut imgui);
@@ -164,109 +167,118 @@ mod example {
 
     fn render_gui(ui: &imgui::Ui, context: &mut HeadcrabContext) {
         context.target_name.reserve(100); // FIXME workaround for imgui-rs#366
-        imgui::Window::new(im_str!("launch")).build(ui, || {
-            ui.input_text(im_str!("target"), &mut context.target_name)
-                .build();
-            if let Some(remote) = &context.remote {
-                if ui.small_button(im_str!("kill")) {
-                    remote.kill().unwrap();
-                    context.remote = None;
-                    return;
-                }
-                ui.same_line(0.0);
-                if ui.small_button(im_str!("step")) {
-                    remote.step().unwrap();
-                    // FIXME hack
-                    let memory_maps = remote.memory_maps().unwrap();
-                    context.debuginfo = Some(RelocatedDwarf::from_maps(&memory_maps).unwrap());
-                }
-                ui.same_line(0.0);
-                if ui.small_button(im_str!("continue")) {
-                    remote.unpause().unwrap();
-                    // FIXME hack
-                    let memory_maps = remote.memory_maps().unwrap();
-                    context.debuginfo = Some(RelocatedDwarf::from_maps(&memory_maps).unwrap());
-                }
-                ui.same_line(0.0);
-                if ui.small_button(im_str!("pbf")) {
-                    patch_breakpoint_function(context).unwrap();
-                }
-            } else {
-                if ui.small_button(im_str!("launch")) {
-                    context
-                        .set_remote(LinuxTarget::launch(context.target_name.to_str()).unwrap().0);
-                }
-            }
-        });
-        if let Some(remote) = &context.remote {
-            imgui::Window::new(im_str!("source")).build(ui, || {
-                if let Err(err) = (|| -> Result<(), Box<dyn std::error::Error>> {
-                    let ip = remote.read_regs()?.rip;
-                    let mut code = [0; 64];
-                    unsafe {
-                        remote.read().read(&mut code, ip as usize).apply()?;
+        imgui::Window::new(im_str!("launch"))
+            .position([5.0, 5.0], Condition::FirstUseEver)
+            .size([390.0, 90.0], Condition::FirstUseEver)
+            .build(ui, || {
+                ui.input_text(im_str!("target"), &mut context.target_name)
+                    .build();
+                if let Some(remote) = &context.remote {
+                    if ui.small_button(im_str!("kill")) {
+                        remote.kill().unwrap();
+                        context.remote = None;
+                        return;
                     }
-                    let disassembly = context.disassembler.source_snippet(&code, ip, true)?;
-                    ui.text(disassembly);
-                    Ok(())
-                })() {
-                    ui.text(format!("{}", err));
+                    ui.same_line(0.0);
+                    if ui.small_button(im_str!("step")) {
+                        remote.step().unwrap();
+                        // FIXME hack
+                        let memory_maps = remote.memory_maps().unwrap();
+                        context.debuginfo = Some(RelocatedDwarf::from_maps(&memory_maps).unwrap());
+                    }
+                    ui.same_line(0.0);
+                    if ui.small_button(im_str!("continue")) {
+                        remote.unpause().unwrap();
+                        // FIXME hack
+                        let memory_maps = remote.memory_maps().unwrap();
+                        context.debuginfo = Some(RelocatedDwarf::from_maps(&memory_maps).unwrap());
+                    }
+                    ui.same_line(0.0);
+                    if ui.small_button(im_str!("pbf")) {
+                        patch_breakpoint_function(context).unwrap();
+                    }
+                } else {
+                    if ui.small_button(im_str!("launch")) {
+                        context.set_remote(
+                            LinuxTarget::launch(context.target_name.to_str()).unwrap().0,
+                        );
+                    }
                 }
             });
-            imgui::Window::new(im_str!("backtrace")).build(ui, || {
-                if let Err(err) = (|| -> Result<(), Box<dyn std::error::Error>> {
-                    ui.radio_button(
-                        im_str!("frame-ptr"),
-                        &mut context.backtrace_type,
-                        BacktraceType::FramePtr,
-                    );
-                    ui.same_line(0.0);
-                    ui.radio_button(
-                        im_str!("naive"),
-                        &mut context.backtrace_type,
-                        BacktraceType::Naive,
-                    );
-
-                    context.load_debuginfo_if_necessary()?;
-
-                    let regs = context.remote.as_ref().unwrap().read_regs()?;
-
-                    let mut stack: [usize; 1024] = [0; 1024];
-                    unsafe {
-                        context
-                            .remote
-                            .as_ref()
-                            .unwrap()
-                            .read()
-                            .read(&mut stack, regs.rsp as usize)
-                            .apply()?;
+        if let Some(remote) = &context.remote {
+            imgui::Window::new(im_str!("source"))
+                .position([400.0, 5.0], Condition::FirstUseEver)
+                .size([395.0, 390.0], Condition::FirstUseEver)
+                .build(ui, || {
+                    if let Err(err) = (|| -> Result<(), Box<dyn std::error::Error>> {
+                        let ip = remote.read_regs()?.rip;
+                        let mut code = [0; 64];
+                        unsafe {
+                            remote.read().read(&mut code, ip as usize).apply()?;
+                        }
+                        let disassembly = context.disassembler.source_snippet(&code, ip, true)?;
+                        ui.text(disassembly);
+                        Ok(())
+                    })() {
+                        ui.text(format!("{}", err));
                     }
+                });
+            imgui::Window::new(im_str!("backtrace"))
+                .position([5.0, 100.0], Condition::FirstUseEver)
+                .size([390.0, 295.0], Condition::FirstUseEver)
+                .build(ui, || {
+                    if let Err(err) = (|| -> Result<(), Box<dyn std::error::Error>> {
+                        ui.radio_button(
+                            im_str!("frame-ptr"),
+                            &mut context.backtrace_type,
+                            BacktraceType::FramePtr,
+                        );
+                        ui.same_line(0.0);
+                        ui.radio_button(
+                            im_str!("naive"),
+                            &mut context.backtrace_type,
+                            BacktraceType::Naive,
+                        );
 
-                    let call_stack: Vec<_> = match context.backtrace_type {
-                        BacktraceType::FramePtr => {
-                            headcrab::symbol::unwind::frame_pointer_unwinder(
+                        context.load_debuginfo_if_necessary()?;
+
+                        let regs = context.remote.as_ref().unwrap().read_regs()?;
+
+                        let mut stack: [usize; 1024] = [0; 1024];
+                        unsafe {
+                            context
+                                .remote
+                                .as_ref()
+                                .unwrap()
+                                .read()
+                                .read(&mut stack, regs.rsp as usize)
+                                .apply()?;
+                        }
+
+                        let call_stack: Vec<_> = match context.backtrace_type {
+                            BacktraceType::FramePtr => {
+                                headcrab::symbol::unwind::frame_pointer_unwinder(
+                                    context.debuginfo(),
+                                    &stack[..],
+                                    regs.rip as usize,
+                                    regs.rsp as usize,
+                                    regs.rbp as usize,
+                                )
+                                .collect()
+                            }
+                            BacktraceType::Naive => headcrab::symbol::unwind::naive_unwinder(
                                 context.debuginfo(),
                                 &stack[..],
                                 regs.rip as usize,
-                                regs.rsp as usize,
-                                regs.rbp as usize,
                             )
-                            .collect()
-                        }
-                        BacktraceType::Naive => headcrab::symbol::unwind::naive_unwinder(
-                            context.debuginfo(),
-                            &stack[..],
-                            regs.rip as usize,
-                        )
-                        .collect(),
-                    };
+                            .collect(),
+                        };
 
-                    let mut frames_list = Vec::new();
-                    for func in call_stack {
-                        let res =
-                            context
-                                .debuginfo()
-                                .with_addr_frames(func, |_addr, mut frames| {
+                        let mut frames_list = Vec::new();
+                        for func in call_stack {
+                            let res = context.debuginfo().with_addr_frames(
+                                func,
+                                |_addr, mut frames| {
                                     let mut first_frame = true;
                                     while let Some(frame) = frames.next()? {
                                         let name = frame
@@ -304,43 +316,44 @@ mod example {
                                         first_frame = false;
                                     }
                                     Ok(first_frame)
-                                })?;
-                        match res {
-                            Some(true) | None => {
-                                frames_list.push(format!(
-                                    "{:016x} at {}",
-                                    func,
-                                    context
-                                        .debuginfo()
-                                        .get_address_demangled_name(func)
-                                        .as_deref()
-                                        .unwrap_or("<unknown>")
-                                ));
-                            }
-                            Some(false) => {}
-                        }
-                    }
-
-                    imgui::ChildWindow::new(im_str!("backtrace_list"))
-                        .horizontal_scrollbar(true)
-                        .build(ui, || {
-                            for (i, frame) in frames_list.into_iter().enumerate() {
-                                let id = ui.push_id(&format!("backtrace_item_{}", i));
-                                if imgui::Selectable::new(&ImString::from(frame))
-                                    .selected(i == context.backtrace_selection)
-                                    .build(ui)
-                                {
-                                    context.backtrace_selection = i;
+                                },
+                            )?;
+                            match res {
+                                Some(true) | None => {
+                                    frames_list.push(format!(
+                                        "{:016x} at {}",
+                                        func,
+                                        context
+                                            .debuginfo()
+                                            .get_address_demangled_name(func)
+                                            .as_deref()
+                                            .unwrap_or("<unknown>")
+                                    ));
                                 }
-                                id.pop(ui);
+                                Some(false) => {}
                             }
-                        });
+                        }
 
-                    Ok(())
-                })() {
-                    ui.text(format!("{}", err));
-                }
-            });
+                        imgui::ChildWindow::new(im_str!("backtrace_list"))
+                            .horizontal_scrollbar(true)
+                            .build(ui, || {
+                                for (i, frame) in frames_list.into_iter().enumerate() {
+                                    let id = ui.push_id(&format!("backtrace_item_{}", i));
+                                    if imgui::Selectable::new(&ImString::from(frame))
+                                        .selected(i == context.backtrace_selection)
+                                        .build(ui)
+                                    {
+                                        context.backtrace_selection = i;
+                                    }
+                                    id.pop(ui);
+                                }
+                            });
+
+                        Ok(())
+                    })() {
+                        ui.text(format!("{}", err));
+                    }
+                });
         }
     }
 
