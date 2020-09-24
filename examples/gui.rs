@@ -109,6 +109,7 @@ mod example {
 
         target_name: ImString,
         backtrace_type: BacktraceType,
+        backtrace_selection: usize,
     }
 
     #[derive(Copy, Clone, PartialEq)]
@@ -319,17 +320,21 @@ mod example {
                             Some(false) => {}
                         }
                     }
-                    let frames_list = frames_list
-                        .into_iter()
-                        .map(ImString::from)
-                        .collect::<Vec<_>>();
-                    let frames_list = frames_list.iter().map(|f| &*f).collect::<Vec<_>>();
-                    ui.list_box(
-                        im_str!("backtrace"),
-                        &mut 0,
-                        &*frames_list,
-                        frames_list.len() as i32,
-                    );
+
+                    imgui::ChildWindow::new(im_str!("backtrace_list"))
+                        .horizontal_scrollbar(true)
+                        .build(ui, || {
+                            for (i, frame) in frames_list.into_iter().enumerate() {
+                                let id = ui.push_id(&format!("backtrace_item_{}", i));
+                                if imgui::Selectable::new(&ImString::from(frame))
+                                    .selected(i == context.backtrace_selection)
+                                    .build(ui)
+                                {
+                                    context.backtrace_selection = i;
+                                }
+                                id.pop(ui);
+                            }
+                        });
 
                     Ok(())
                 })() {
