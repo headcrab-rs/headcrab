@@ -58,6 +58,7 @@ mod example {
             }),
         }]);
         imgui.io_mut().font_global_scale = (1.0 / platform.hidpi_factor()) as f32;
+        imgui.io_mut().config_windows_move_from_title_bar_only = true;
         let mut renderer = Renderer::init(&mut imgui, &display).unwrap();
 
         let mut headcrab_ctx = HeadcrabContext::default();
