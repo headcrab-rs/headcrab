@@ -323,7 +323,12 @@ mod example {
                         .map(ImString::from)
                         .collect::<Vec<_>>();
                     let frames_list = frames_list.iter().map(|f| &*f).collect::<Vec<_>>();
-                    ui.list_box(im_str!("backtrace"), &mut 0, &*frames_list, frames_list.len() as i32);
+                    ui.list_box(
+                        im_str!("backtrace"),
+                        &mut 0,
+                        &*frames_list,
+                        frames_list.len() as i32,
+                    );
 
                     Ok(())
                 })() {
@@ -337,7 +342,9 @@ mod example {
     /// breakpoint. This is useful while we don't have support for setting breakpoints at
     /// runtime yet.
     /// FIXME remove once real breakpoint support is added
-    fn patch_breakpoint_function(context: &mut HeadcrabContext) -> Result<(), Box<dyn std::error::Error>> {
+    fn patch_breakpoint_function(
+        context: &mut HeadcrabContext,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         context.load_debuginfo_if_necessary()?;
         // Test that `a_function` resolves to a function.
         let breakpoint_addr = context.debuginfo().get_symbol_address("breakpoint").unwrap() + 4 /* prologue */;
