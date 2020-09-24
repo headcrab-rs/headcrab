@@ -66,8 +66,9 @@ mod example {
 
         event_loop.run(move |event, _, control_flow| match event {
             Event::NewEvents(_) => {
-                imgui.io_mut().update_delta_time(last_frame);
-                last_frame = Instant::now();
+                let now = Instant::now();
+                imgui.io_mut().update_delta_time(now - last_frame);
+                last_frame = now;
             }
             Event::MainEventsCleared => {
                 platform
