@@ -40,15 +40,15 @@ winapi = { version = "0.3.9", features = ["winuser","processthreadsapi","winbase
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 headcrab_inject = { path = "./headcrab_inject" }
-
-[dev-dependencies]
-rustyline = "6.2.0"
-repl_tools = { path = "./repl_tools" }
 imgui = "0.5.0"
 imgui-glium-renderer = "0.5.0"
 imgui-winit-support = "0.5.0"
 glium = "0.27.0"
 clipboard = "0.5.0"
+
+[dev-dependencies]
+rustyline = "6.2.0"
+repl_tools = { path = "./repl_tools" }
 
 [features]
 syntax-highlighting = ["syntect"]
