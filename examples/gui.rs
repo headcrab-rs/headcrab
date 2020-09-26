@@ -21,7 +21,7 @@ mod example {
     use headcrab::{
         symbol::DisassemblySource, symbol::RelocatedDwarf, target::LinuxTarget, target::UnixTarget,
     };
-    use imgui::{im_str, ClipboardBackend, Condition, FontConfig, FontSource, ImStr, ImString};
+    use imgui::{im_str, ClipboardBackend, Condition, FontSource, ImStr, ImString};
     use imgui_glium_renderer::Renderer;
     use imgui_winit_support::{HiDpiMode, WinitPlatform};
 
@@ -54,11 +54,10 @@ mod example {
             HiDpiMode::Default,
         );
 
-        imgui.fonts().add_font(&[FontSource::DefaultFontData {
-            config: Some(FontConfig {
-                size_pixels: (13.0 * platform.hidpi_factor()) as f32,
-                ..FontConfig::default()
-            }),
+        imgui.fonts().add_font(&[FontSource::TtfData {
+            data: include_bytes!("../fonts/FiraMono-Regular.ttf"),
+            size_pixels: (13.0 * platform.hidpi_factor()) as f32,
+            config: None,
         }]);
         imgui.io_mut().font_global_scale = (1.0 / platform.hidpi_factor()) as f32;
         imgui.io_mut().config_windows_move_from_title_bar_only = true;
