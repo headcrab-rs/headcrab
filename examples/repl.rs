@@ -10,11 +10,8 @@ fn main() {
 
 #[cfg(target_os = "linux")]
 mod example {
-    use std::borrow::Cow;
-    use std::{
-        os::unix::ffi::OsStrExt,
-        path::{Path, PathBuf},
-    };
+    use std::{borrow::Cow, process::Command};
+    use std::{os::unix::ffi::OsStrExt, path::PathBuf};
 
     use headcrab::{
         symbol::{DisassemblySource, RelocatedDwarf, Snippet},
@@ -236,7 +233,7 @@ mod example {
 
         if let Some(exec_cmd) = exec_cmd {
             println!("Starting program: {}", exec_cmd);
-            context.set_remote(match LinuxTarget::launch(Path::new(&exec_cmd)) {
+            context.set_remote(match LinuxTarget::launch(Command::new(exec_cmd)) {
                 Ok((target, status)) => {
                     println!("{:?}", status);
                     target
@@ -323,7 +320,7 @@ mod example {
             }
             ReplCommand::Exec(cmd) => {
                 println!("Starting program: {}", cmd.display());
-                let (remote, status) = LinuxTarget::launch(&cmd)?;
+                let (remote, status) = LinuxTarget::launch(Command::new(cmd))?;
                 println!("{:?}", status);
                 context.set_remote(remote);
             }
