@@ -100,7 +100,7 @@ impl UnixTarget for LinuxTarget {
         ptrace::cont(self.pid(), None)?;
         let status = waitpid(self.pid(), None)?;
 
-        //// We may have hit a user defined breakpoint
+        // We may have hit a user defined breakpoint
         if let WaitStatus::Stopped(_, nix::sys::signal::Signal::SIGTRAP) = status {
             if let Some(bp) = self
                 .breakpoints
@@ -129,7 +129,7 @@ impl UnixTarget for LinuxTarget {
 impl LinuxTarget {
     /// executes the code instrumented by a breakpoint if one has been hit
     /// and resets the breakpoint
-    /// returns true if it executed and instruction, false otherwise
+    /// returns true if it executed an instruction, false otherwise
     /// The function may not execute the instrumented instruction if the
     /// P.C is not where the breakpoint was set
     fn handle_breakpoint(&self) -> Result<bool, Box<dyn std::error::Error>> {
