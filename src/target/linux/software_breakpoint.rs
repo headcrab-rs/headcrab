@@ -66,8 +66,10 @@ impl Breakpoint {
 
     /// Wether this breakpoint has instrumented the target's code
     pub fn is_armed(&self) -> bool {
-        std::thread::sleep(std::time::Duration::from_millis(100));
-        let instr = ptrace::read(self.pid, self.addr as *mut _).unwrap_or(0);
+        std::thread::sleep(std::time::Duration::from_nanos(1));
+        let instr = ptrace::read(self.pid, self.addr as *mut _)
+            .map_err(|err| eprintln!("Failed to check if breakpoint is armed ({})", err))
+            .unwrap_or(0);
         (instr & 0xff) == INT3
     }
 }
