@@ -408,24 +408,27 @@ mod example {
         context.load_debuginfo_if_necessary()?;
 
         if let Ok(addr) = {
-            i64::from_str_radix(&sub_cmd, 10)
+            usize::from_str_radix(&sub_cmd, 10)
                 .map(|addr| addr as usize)
                 .map_err(|e| Box::new(e))
                 .or_else(|_e| {
-                    let raw_num = sub_cmd.trim_start_matches("0x");
-                    i64::from_str_radix(raw_num, 16).map(|addr| addr as usize)
-                })
-                .or_else(|_e| {
-                    context
-                        .debuginfo()
-                        .get_symbol_address(&sub_cmd)
-                        .ok_or(Box::new(format!("No such symbol {}", sub_cmd)))
+                    if sub_cmd.starts_with("0x") {
+                        let raw_num = sub_cmd.trim_start_matches("0x");
+                        usize::from_str_radix(raw_num, 16)
+                            .map(|addr| addr as usize)
+                            .map_err(|_e| Box::new(format!("Invalid address format.")))
+                    } else {
+                        context
+                            .debuginfo()
+                            .get_symbol_address(&sub_cmd)
+                            .ok_or(Box::new(format!("No such symbol {}", sub_cmd)))
+                    }
                 })
         } {
             context.mut_remote()?.set_breakpoint(addr)?;
         } else {
             Err(format!(
-                "Breakpoints must be set on a symbol or at a given address. For example `break main` or `break 0x0000555555559394`"
+                "Breakpoints must be set on a symbol or at a given address. For example `b main` or `b 0x0000555555559394` or even `b 93824992252820`"
             ))?
         }
         Ok(())
