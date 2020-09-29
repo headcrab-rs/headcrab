@@ -134,10 +134,9 @@ fn single_step() -> Result<(), Box<dyn std::error::Error>> {
     let offsets = [0, 1, 4, 8, 11, 17];
     for offset in offsets.iter() {
         let rip = test_utils::current_ip(&target);
-        //println!("rip: {:#012x}", rip);
         assert_eq!(rip, (main_addr as u64 + offset), "Steps");
         let status = target.step()?;
-        assert_eq!(status, test_utils::ws_sigtrap(&target), "stataus");
+        assert_eq!(status, test_utils::ws_sigtrap(&target), "status");
     }
     test_utils::continue_to_end(&target);
     Ok(())
