@@ -40,7 +40,9 @@ fn runtime_breakpoint() -> Result<(), Box<dyn std::error::Error>> {
     // have we hit the breakpoint ?
     let ip = target.read_regs()?.rip;
     assert_eq!(ip as usize, main_addr);
-    //assert!(breakpoint.is_active());
+    let status = target.step()?;
+    assert_eq!(status, test_utils::ws_sigtrap(&target));
+    assert!(breakpoint.is_armed());
 
     test_utils::continue_to_end(&target);
     Ok(())
