@@ -122,10 +122,6 @@ impl UnixTarget for LinuxTarget {
             ptrace::step(self.pid(), None).map_err(|e| Box::new(e))?;
         }
         let status = waitpid(self.pid(), None)?;
-        assert_eq!(
-            status,
-            WaitStatus::Stopped(self.pid(), nix::sys::signal::SIGTRAP)
-        );
         Ok(status)
     }
 }
