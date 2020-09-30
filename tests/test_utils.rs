@@ -35,9 +35,9 @@ pub fn launch(path: &str) -> LinuxTarget {
 #[cfg(target_os = "linux")]
 #[allow(dead_code)]
 pub fn continue_to_end(target: &LinuxTarget) {
-    match target.unpause().unwrap() {
+    match target.unpause().expect("Failed to unpause target") {
         nix::sys::wait::WaitStatus::Exited(_, 0) => {}
-        status => panic!("Status: {:?}", status),
+        status => panic!("Unexpected signal: Status: {:?}", status),
     }
 }
 
@@ -67,4 +67,16 @@ pub fn patch_breakpoint(target: &LinuxTarget, debuginfo: &RelocatedDwarf) {
         libc::c_ulong::from_ne_bytes(breakpoint_inst) as *mut _,
     )
     .unwrap();
+}
+
+#[cfg(target_os = "linux")]
+#[allow(dead_code)]
+pub fn current_ip(target: &LinuxTarget) -> u64 {
+    target.read_regs().expect("could not read registers").rip
+}
+
+#[cfg(target_os = "linux")]
+#[allow(dead_code)]
+pub fn ws_sigtrap(target: &LinuxTarget) -> nix::sys::wait::WaitStatus {
+    nix::sys::wait::WaitStatus::Stopped(target.pid(), nix::sys::signal::SIGTRAP)
 }

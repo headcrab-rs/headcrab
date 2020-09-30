@@ -42,6 +42,8 @@ mod example {
         Stepi|si: (),
         /// Continue the program being debugged
         Continue|cont: (),
+        /// Set a breakpoint at symbol or address
+        Breakpoint|b: String,
         // FIXME move the `read:` part before the `--` in the help
         /// read: List registers and their content for the current stack frame
         Registers|regs: String,
@@ -145,6 +147,14 @@ mod example {
     impl Context {
         fn remote(&self) -> Result<&LinuxTarget, Box<dyn std::error::Error>> {
             if let Some(remote) = &self.remote {
+                Ok(remote)
+            } else {
+                Err("No running process".to_string().into())
+            }
+        }
+
+        fn mut_remote(&mut self) -> Result<&mut LinuxTarget, Box<dyn std::error::Error>> {
+            if let Some(remote) = &mut self.remote {
                 Ok(remote)
             } else {
                 Err("No running process".to_string().into())
@@ -335,6 +345,7 @@ mod example {
                 context.remote = None;
             }
             ReplCommand::Kill(()) => println!("{:?}", context.remote()?.kill()?),
+            ReplCommand::Breakpoint(location) => set_breakpoint(context, &location)?,
             ReplCommand::Stepi(()) => {
                 println!("{:?}", context.remote()?.step()?);
                 return print_source_for_top_of_stack_symbol(context, 3);
@@ -381,6 +392,39 @@ mod example {
                 return inject_lib(context, file);
             }
             ReplCommand::Exit(()) => unreachable!("Should be handled earlier"),
+        }
+        Ok(())
+    }
+
+    fn set_breakpoint(
+        context: &mut Context,
+        location: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        context.load_debuginfo_if_necessary()?;
+
+        if let Ok(addr) = {
+            usize::from_str_radix(&location, 10)
+                .map(|addr| addr as usize)
+                .map_err(|e| Box::new(e))
+                .or_else(|_e| {
+                    if location.starts_with("0x") {
+                        let raw_num = location.trim_start_matches("0x");
+                        usize::from_str_radix(raw_num, 16)
+                            .map(|addr| addr as usize)
+                            .map_err(|_e| Box::new(format!("Invalid address format.")))
+                    } else {
+                        context
+                            .debuginfo()
+                            .get_symbol_address(&location)
+                            .ok_or(Box::new(format!("No such symbol {}", location)))
+                    }
+                })
+        } {
+            context.mut_remote()?.set_breakpoint(addr)?;
+        } else {
+            Err(format!(
+                "Breakpoints must be set on a symbol or at a given address. For example `b main` or `b 0x0000555555559394` or even `b 93824992252820`"
+            ))?
         }
         Ok(())
     }

@@ -1,14 +1,18 @@
 mod hardware_breakpoint;
 mod memory;
 mod readmem;
+mod software_breakpoint;
 mod writemem;
 
 use crate::target::thread::Thread;
 use crate::target::unix::{self, UnixTarget};
 use nix::sys::ptrace;
+use nix::sys::wait::{waitpid, WaitStatus};
 use nix::unistd::{getpid, Pid};
 use procfs::process::{Process, Task};
 use procfs::ProcError;
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::{
     ffi::CString,
     fs::File,
@@ -20,6 +24,7 @@ pub use hardware_breakpoint::{
     HardwareBreakpoint, HardwareBreakpointError, HardwareBreakpointSize, HardwareBreakpointType,
 };
 pub use readmem::ReadMemory;
+pub use software_breakpoint::Breakpoint;
 pub use writemem::WriteMemory;
 
 lazy_static::lazy_static! {
@@ -71,6 +76,10 @@ impl Thread for LinuxThread {
 pub struct LinuxTarget {
     pid: Pid,
     hardware_breakpoints: [Option<HardwareBreakpoint>; SUPPORTED_HARDWARE_BREAKPOINTS],
+    breakpoints: RefCell<HashMap<usize, Breakpoint>>,
+    // Some if the target stopped because of a breakpoint
+    // None if stopped for another status
+    hit_breakpoint: RefCell<Option<Breakpoint>>,
 }
 
 /// This structure is used to pass options to attach
@@ -85,13 +94,75 @@ impl UnixTarget for LinuxTarget {
     fn pid(&self) -> Pid {
         self.pid
     }
+
+    fn unpause(&self) -> Result<WaitStatus, Box<dyn std::error::Error>> {
+        self.handle_breakpoint()?;
+        ptrace::cont(self.pid(), None)?;
+        let status = waitpid(self.pid(), None)?;
+
+        // We may have hit a user defined breakpoint
+        if let WaitStatus::Stopped(_, nix::sys::signal::Signal::SIGTRAP) = status {
+            if let Some(bp) = self
+                .breakpoints
+                .borrow_mut()
+                .get_mut(&(self.read_regs()?.rip as usize - 1))
+            {
+                // Register which breakpoint was  hit
+                self.hit_breakpoint.borrow_mut().replace(bp.clone());
+
+                // Restore the program to its uninstrumented state
+                self.restore_breakpoint(bp)?;
+            };
+        }
+        Ok(status)
+    }
+
+    fn step(&self) -> Result<WaitStatus, Box<dyn std::error::Error>> {
+        let status = self.handle_breakpoint()?;
+        match status {
+            None => {
+                ptrace::step(self.pid(), None).map_err(|e| Box::new(e))?;
+                Ok(waitpid(self.pid(), None)?)
+            }
+            Some(status) => Ok(status),
+        }
+    }
 }
 
 impl LinuxTarget {
+    /// executes the code instrumented by a breakpoint if one has been hit
+    /// and resets the breakpoint
+    /// returns true if it executed an instruction, false otherwise
+    /// The function may not execute the instrumented instruction if the
+    /// P.C is not where the breakpoint was set
+    fn handle_breakpoint(&self) -> Result<Option<WaitStatus>, Box<dyn std::error::Error>> {
+        let mut status = None;
+
+        let bp = { self.hit_breakpoint.borrow_mut().take() };
+        // if we have hit a breakpoint previously
+        if let Some(mut bp) = bp {
+            let rip = self.read_regs()?.rip as usize;
+            // if we are not a the right address, we simply set the breakpoint again, and
+            // carry on
+            if (rip == bp.addr) && bp.is_enabled() {
+                assert!(!bp.is_armed());
+                ptrace::step(self.pid(), None)?;
+                status = Some(waitpid(self.pid(), None)?);
+            }
+            // else user has modified rip and we're not at the breakpoint anymore
+            if bp.is_enabled() {
+                bp.set()?;
+            }
+        }
+        Ok(status)
+    }
+
     fn new(pid: Pid) -> Self {
         Self {
             pid,
             hardware_breakpoints: Default::default(),
+            breakpoints: RefCell::new(HashMap::new()),
+            hit_breakpoint: RefCell::new(None),
         }
     }
 
@@ -110,7 +181,7 @@ impl LinuxTarget {
     pub fn attach(
         pid: Pid,
         options: AttachOptions,
-    ) -> Result<(LinuxTarget, nix::sys::wait::WaitStatus), Box<dyn std::error::Error>> {
+    ) -> Result<(LinuxTarget, WaitStatus), Box<dyn std::error::Error>> {
         let status = unix::attach(pid)?;
         let target = LinuxTarget::new(pid);
 
@@ -182,8 +253,8 @@ impl LinuxTarget {
         )?;
 
         // Perform syscall
-        nix::sys::ptrace::step(self.pid(), None)?;
-        nix::sys::wait::waitpid(self.pid(), None)?;
+        ptrace::step(self.pid(), None)?;
+        waitpid(self.pid(), None)?;
 
         // Read return value
         let res = self.read_regs()?.rax;
@@ -404,6 +475,54 @@ impl LinuxTarget {
 
         #[cfg(not(target_arch = "x86_64"))]
         Err(Box::new(HardwareBreakpointError::UnsupportedPlatform))
+    }
+
+    /// Set a breakpoint at a given address
+    /// This modifies the Target's memory by writting an INT3 instr. at `addr`
+    /// The returned Breakpoint object can then be used to disable the breakpoint
+    /// or query its state
+    pub fn set_breakpoint(&self, addr: usize) -> Result<Breakpoint, Box<dyn std::error::Error>> {
+        let bp = Breakpoint::new(addr, self.pid())?;
+        let existing_breakpoint = {
+            let hdl = self.breakpoints.borrow();
+            hdl.get(&addr).map(|val| val.clone())
+        };
+
+        let mut bp = match existing_breakpoint {
+            None => {
+                self.breakpoints.borrow_mut().insert(addr, bp.clone());
+                bp
+            }
+            // If there is already a breakpoint set, we give back the existing one
+            Some(breakpoint) => breakpoint,
+        };
+        bp.set()?;
+        Ok(bp)
+    }
+
+    /// Restore the instruction shadowed by `bp` & rollback the P.C by 1
+    fn restore_breakpoint(&self, bp: &mut Breakpoint) -> Result<(), Box<dyn std::error::Error>> {
+        if !bp.is_armed() {
+            // Fail silently if restoring an inactive breakpoint
+            return Ok(());
+        }
+        // restore the instruction
+        bp.unset()?;
+
+        // rollback the P.C
+        let mut regs = self.read_regs()?;
+        regs.rip -= 1;
+        self.write_regs(regs)?;
+
+        Ok(())
+    }
+
+    /// Disable the breakpoint. Call `set()` on the Breakpoint to enable it again
+    pub fn disable_breakpoint(
+        &self,
+        bp: &mut Breakpoint,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        bp.disable().map_err(|e| e.into())
     }
 
     // Temporary function until ptrace_peekuser is fixed in nix crate
