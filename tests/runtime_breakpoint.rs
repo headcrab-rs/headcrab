@@ -100,7 +100,7 @@ fn looping_breakpoint() -> Result<(), Box<dyn std::error::Error>> {
     assert!(breakpoint.is_armed());
     assert!(breakpoint.is_enabled());
 
-    // The testee should call the `breakpoint()` function 7 times
+    // The testee should call the `breakpoint()` function 8 times
     // make sure we hit the breakpoint each time
     for _ in 0..8 {
         let status = target.unpause()?;

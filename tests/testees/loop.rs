@@ -9,5 +9,5 @@ fn main() {
     for i in 0..breaks {
         breakpoint(i);
     }
-    println!("Called `breakpoint` {} times.", breaks - 1);
+    println!("Called `breakpoint` {} times.", breaks);
 }
