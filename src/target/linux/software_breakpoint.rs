@@ -3,6 +3,7 @@
 //! replacing an instruction with one that causes a signal to be raised by the
 //! cpu.
 
+use crate::target::{LinuxTarget, ReadMemory};
 use nix::sys::ptrace;
 use nix::unistd::Pid;
 use std::cell::Cell;
@@ -22,7 +23,13 @@ pub struct Breakpoint {
 impl Breakpoint {
     /// Set a breakpoint at a given address
     pub(crate) fn new(addr: usize, pid: Pid) -> Result<Self, BreakpointError> {
-        let shadow = ptrace::read(pid, addr as *mut _)?;
+        let mut shadow = 0_i64;
+        unsafe {
+            ReadMemory::new(&LinuxTarget::new(pid))
+                .read(&mut shadow, addr)
+                .apply()
+        }
+        .map_err(|_e| BreakpointError::IoError)?;
         Ok(Breakpoint {
             addr,
             shadow,
