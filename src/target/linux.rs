@@ -119,14 +119,13 @@ impl UnixTarget for LinuxTarget {
 
     fn step(&self) -> Result<WaitStatus, Box<dyn std::error::Error>> {
         let status = self.handle_breakpoint()?;
-        let status = match status {
+        match status {
             None => {
                 ptrace::step(self.pid(), None).map_err(|e| Box::new(e))?;
-                waitpid(self.pid(), None)?
+                Ok(waitpid(self.pid(), None)?)
             }
-            Some(status) => status,
-        };
-        Ok(status)
+            Some(status) => Ok(status),
+        }
     }
 }
 
