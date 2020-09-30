@@ -118,10 +118,14 @@ impl UnixTarget for LinuxTarget {
     }
 
     fn step(&self) -> Result<WaitStatus, Box<dyn std::error::Error>> {
-        if !self.handle_breakpoint()? {
-            ptrace::step(self.pid(), None).map_err(|e| Box::new(e))?;
-        }
-        let status = waitpid(self.pid(), None)?;
+        let status = self.handle_breakpoint()?;
+        let status = match status {
+            None => {
+                ptrace::step(self.pid(), None).map_err(|e| Box::new(e))?;
+                waitpid(self.pid(), None)?
+            }
+            Some(status) => status,
+        };
         Ok(status)
     }
 }
@@ -132,8 +136,8 @@ impl LinuxTarget {
     /// returns true if it executed an instruction, false otherwise
     /// The function may not execute the instrumented instruction if the
     /// P.C is not where the breakpoint was set
-    fn handle_breakpoint(&self) -> Result<bool, Box<dyn std::error::Error>> {
-        let mut stepped = false;
+    fn handle_breakpoint(&self) -> Result<Option<WaitStatus>, Box<dyn std::error::Error>> {
+        let mut status = None;
 
         let bp = { self.hit_breakpoint.borrow_mut().take() };
         // if we have hit a breakpoint previously
@@ -144,14 +148,14 @@ impl LinuxTarget {
             if (rip == bp.addr) && bp.is_enabled() {
                 assert!(!bp.is_armed());
                 ptrace::step(self.pid(), None)?;
-                stepped = true;
+                status = Some(waitpid(self.pid(), None)?);
             }
             // else user has modified rip and we're not at the breakpoint anymore
             if bp.is_enabled() {
                 bp.set()?;
             }
         }
-        Ok(stepped)
+        Ok(status)
     }
 
     fn new(pid: Pid) -> Self {
