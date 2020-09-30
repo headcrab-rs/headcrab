@@ -485,16 +485,16 @@ impl LinuxTarget {
         let bp = Breakpoint::new(addr, self.pid())?;
         let existing_breakpoint = {
             let hdl = self.breakpoints.borrow();
-            hdl.get(&addr).and_then(|val| Some(val.clone()))
+            hdl.get(&addr).map(|val| val.clone())
         };
 
         let mut bp = match existing_breakpoint {
             None => {
                 self.breakpoints.borrow_mut().insert(addr, bp.clone());
-                bp.clone()
+                bp
             }
             // If there is already a breakpoint set, we give back the existing one
-            Some(breakpoint) => breakpoint.clone(),
+            Some(breakpoint) => breakpoint,
         };
         bp.set()?;
         Ok(bp)
