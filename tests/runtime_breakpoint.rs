@@ -75,6 +75,10 @@ fn multiple_breakpoints() -> Result<(), Box<dyn std::error::Error>> {
 
     target.write_regs(regs)?;
     breakpoint2.disable()?;
+    assert!(!breakpoint.is_armed());
+
+    regs.rip += 3;
+    target.write_regs(regs)?;
 
     // Same, let's check that creating a new breakpoint and unsetting it right away
     // disarms the trap
