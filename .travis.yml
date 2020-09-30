@@ -2,6 +2,13 @@ os:
   - linux
   - osx
 
+addons:
+  apt:
+    packages:
+      - libxxf86vm-dev
+      - libxcb-shape0-dev
+      - libxcb-xfixes0-dev
+
 language: rust
 rust:
   - stable
