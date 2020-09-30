@@ -350,7 +350,7 @@ mod example {
                 context.remote = None;
             }
             ReplCommand::Kill(()) => println!("{:?}", context.remote()?.kill()?),
-            ReplCommand::Breakpoint(sub_cmd) => set_breakpoint(context, &sub_cmd)?,
+            ReplCommand::Breakpoint(location) => set_breakpoint(context, &location)?,
             ReplCommand::Stepi(()) => {
                 println!("{:?}", context.remote()?.step()?);
                 return print_source_for_top_of_stack_symbol(context, 3);
@@ -403,25 +403,25 @@ mod example {
 
     fn set_breakpoint(
         context: &mut Context,
-        sub_cmd: &String,
+        location: &str,
     ) -> Result<(), Box<dyn std::error::Error>> {
         context.load_debuginfo_if_necessary()?;
 
         if let Ok(addr) = {
-            usize::from_str_radix(&sub_cmd, 10)
+            usize::from_str_radix(&location, 10)
                 .map(|addr| addr as usize)
                 .map_err(|e| Box::new(e))
                 .or_else(|_e| {
-                    if sub_cmd.starts_with("0x") {
-                        let raw_num = sub_cmd.trim_start_matches("0x");
+                    if location.starts_with("0x") {
+                        let raw_num = location.trim_start_matches("0x");
                         usize::from_str_radix(raw_num, 16)
                             .map(|addr| addr as usize)
                             .map_err(|_e| Box::new(format!("Invalid address format.")))
                     } else {
                         context
                             .debuginfo()
-                            .get_symbol_address(&sub_cmd)
-                            .ok_or(Box::new(format!("No such symbol {}", sub_cmd)))
+                            .get_symbol_address(&location)
+                            .ok_or(Box::new(format!("No such symbol {}", location)))
                     }
                 })
         } {
