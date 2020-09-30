@@ -306,8 +306,6 @@ mod example {
     fn run_command(context: &mut Context, color: bool, command: &str) -> CrabResult<()> {
         if command == "" {
             return Ok(());
-        } else if command == "_patch_breakpoint_function" {
-            return patch_breakpoint_function(context);
         }
 
         let command = ReplCommand::from_str(command)?;
@@ -417,43 +415,6 @@ mod example {
                 "Breakpoints must be set on a symbol or at a given address. For example `b main` or `b 0x0000555555559394` or even `b 93824992252820`"
             ))?
         }
-        Ok(())
-    }
-
-    /// Patch the `pause` instruction inside a function called `breakpoint` to be a
-    /// breakpoint. This is useful while we don't have support for setting breakpoints at
-    /// runtime yet.
-    /// FIXME remove once real breakpoint support is added
-    fn patch_breakpoint_function(context: &mut Context) -> CrabResult<()> {
-        context.load_debuginfo_if_necessary()?;
-        // Test that `a_function` resolves to a function.
-        let breakpoint_addr = context.debuginfo().get_symbol_address("breakpoint").unwrap() + 4 /* prologue */;
-        // Write breakpoint to the `breakpoint` function.
-        let mut pause_inst = 0 as libc::c_ulong;
-        unsafe {
-            context
-                .remote()?
-                .read()
-                .read(&mut pause_inst, breakpoint_addr)
-                .apply()
-                .unwrap();
-        }
-        // pause (rep nop); ...
-        assert_eq!(
-            &pause_inst.to_ne_bytes()[0..2],
-            &[0xf3, 0x90],
-            "Pause instruction not found"
-        );
-        let mut breakpoint_inst = pause_inst.to_ne_bytes();
-        // int3; nop; ...
-        breakpoint_inst[0] = 0xcc;
-        nix::sys::ptrace::write(
-            context.remote()?.pid(),
-            breakpoint_addr as *mut _,
-            libc::c_ulong::from_ne_bytes(breakpoint_inst) as *mut _,
-        )
-        .unwrap();
-
         Ok(())
     }
 
@@ -671,31 +632,26 @@ mod example {
                         .map_err(|err: gimli::Error| err)?
                         .unwrap_or_else(|| "<unknown>".to_string());
 
-                    // TODO: currently we are skipping over `_mm_pause` but once we have real
-                    // breakpoint support and `_patch_breakpoint_function` gets removed, this
-                    // must also be removed.
-                    if !name.contains("_mm_pause") {
-                        let (file, line, column) = frame
-                            .location
-                            .as_ref()
-                            .map(|loc| {
-                                (
-                                    loc.file.unwrap_or("<unknown file>"),
-                                    loc.line.unwrap_or(0),
-                                    loc.column.unwrap_or(0),
-                                )
-                            })
-                            .unwrap_or_default();
-                        Snippet::from_file(
-                            file,
-                            name,
-                            line as usize,
-                            context_lines as usize,
-                            column as usize,
-                        )?
-                        .highlight();
-                        break;
-                    }
+                    let (file, line, column) = frame
+                        .location
+                        .as_ref()
+                        .map(|loc| {
+                            (
+                                loc.file.unwrap_or("<unknown file>"),
+                                loc.line.unwrap_or(0),
+                                loc.column.unwrap_or(0),
+                            )
+                        })
+                        .unwrap_or_default();
+                    Snippet::from_file(
+                        file,
+                        name,
+                        line as usize,
+                        context_lines as usize,
+                        column as usize,
+                    )?
+                    .highlight();
+                    break;
                 }
                 Ok(())
             })?;

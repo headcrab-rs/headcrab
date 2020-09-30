@@ -3,13 +3,16 @@ static STATICVAR: &str = "Hello, world!\n";
 #[no_mangle]
 #[inline(never)]
 fn breakpoint() {
-    // This will be patched by the debugger to be a breakpoint
-    unsafe { core::arch::x86_64::_mm_pause(); }
+    unsafe {
+        core::arch::x86_64::_mm_pause();
+    }
 }
 
 #[inline(never)]
 fn black_box<T>(v: T) {
-    unsafe { std::ptr::read_volatile(&v); }
+    unsafe {
+        std::ptr::read_volatile(&v);
+    }
 }
 
 struct A {
@@ -25,10 +28,7 @@ pub fn main() {
         black_box(&mut temp);
     }
     black_box(reg_var);
-    let a = A {
-        b: 42,
-        c: &43,
-    };
+    let a = A { b: 42, c: &43 };
     black_box(&a);
     breakpoint();
     black_box(reg_var);
