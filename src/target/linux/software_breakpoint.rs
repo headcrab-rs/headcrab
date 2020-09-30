@@ -1,5 +1,5 @@
 //! Bundles functionalities related to software breakpoints
-//! Software Breakpoints work by overwritting the target program's memory.
+//! Software Breakpoints work by overwritting the target program's memory;
 //! replacing an instruction with one that causes a signal to be raised by the
 //! cpu.
 
