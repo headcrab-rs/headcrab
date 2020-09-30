@@ -1,5 +1,5 @@
 //! Bundles functionalities related to software breakpoints
-//! Software Breakpoints work by overwritting the target program's memory;
+//! Software Breakpoints work by overwriting the target program's memory;
 //! replacing an instruction with one that causes a signal to be raised by the
 //! cpu.
 
@@ -13,7 +13,7 @@ const INT3: libc::c_long = 0xcc;
 pub struct Breakpoint {
     /// The address at which the debugger should insert this breakpoint
     pub addr: usize,
-    /// The original instruction overwritten by the breakpoint
+    /// The original instruction overwriten by the breakpoint
     pub(super) shadow: i64,
     pid: Pid,
     user_enabled: Rc<Cell<bool>>,
@@ -64,7 +64,7 @@ impl Breakpoint {
         self.user_enabled.get()
     }
 
-    /// Wether this breakpoint has instrumented the target's code
+    /// Whether this breakpoint has instrumented the target's code
     pub fn is_armed(&self) -> bool {
         let instr = ptrace::read(self.pid, self.addr as *mut _)
             .map_err(|err| eprintln!("Failed to check if breakpoint is armed ({})", err))
