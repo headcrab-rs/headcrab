@@ -20,7 +20,7 @@ mod example {
     };
 
     #[cfg(target_os = "linux")]
-    use headcrab_inject::{compile_clif_code, DataId, FuncId, InjectionContext};
+    use headcrab_inject::{inject_clif_code, DataId, FuncId, InjectionModule};
 
     use repl_tools::HighlightAndComplete;
     use rustyline::{completion::Pair, CompletionType};
@@ -808,8 +808,8 @@ mod example {
     fn inject_clif(context: &mut Context, file: PathBuf) -> CrabResult<()> {
         context.load_debuginfo_if_necessary()?;
 
-        let mut inj_ctx = InjectionContext::new(context.remote()?)?;
-        let run_function = headcrab_inject::inject_clif_code(
+        let mut inj_ctx = InjectionModule::new(context.remote()?)?;
+        let run_function = inject_clif_code(
             &mut inj_ctx,
             &|sym| context.debuginfo().get_symbol_address(sym).unwrap() as u64,
             &std::fs::read_to_string(file)?,
@@ -851,7 +851,7 @@ mod example {
     fn inject_lib(context: &mut Context, file: PathBuf) -> CrabResult<()> {
         context.load_debuginfo_if_necessary()?;
 
-        let mut inj_ctx = InjectionContext::new(context.remote()?)?;
+        let mut inj_ctx = InjectionModule::new(context.remote()?)?;
         inj_ctx.define_function(
             FuncId::from_u32(0),
             context.debuginfo().get_symbol_address("dlopen").unwrap() as u64,
@@ -875,7 +875,7 @@ mod example {
         for func in functions {
             ctx.clear();
             ctx.func = func;
-            compile_clif_code(&mut inj_ctx, &*isa, &mut ctx)?;
+            inj_ctx.compile_clif_code(&*isa, &mut ctx)?;
         }
 
         let run_function = inj_ctx.lookup_function(FuncId::from_u32(2));
