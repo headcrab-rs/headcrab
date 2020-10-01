@@ -55,7 +55,7 @@ fn inject_abort() -> headcrab::CrabResult<()> {
     }
 
     let run_function = inj_module.lookup_function(FuncId::from_u32(1));
-    let stack_region = inj_module.allocate_readwrite(0x1000)?;
+    let stack_region = inj_module.inj_ctx().allocate_readwrite(0x1000, Some(16))?;
     println!(
         "run function: 0x{:016x} stack: 0x{:016x}",
         run_function, stack_region
