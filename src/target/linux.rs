@@ -28,17 +28,17 @@ pub use writemem::WriteMemory;
 
 lazy_static::lazy_static! {
     pub static ref PAGE_SIZE: usize = unsafe { libc::sysconf(libc::_SC_PAGESIZE) as usize };
-    #[cfg(target_arch="x86_64")]
+    #[cfg(feature="x86_64")]
     static ref DEBUG_REG_OFFSET: usize = unsafe {
         let x = std::mem::zeroed::<libc::user>();
         (&x.u_debugreg as *const _ as usize) - (&x as *const _ as usize)
     };
 }
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(feature = "x86_64")]
 const SUPPORTED_HARDWARE_BREAKPOINTS: usize = 4;
 
-#[cfg(not(target_arch = "x86_64"))]
+#[cfg(not(feature = "x86_64"))]
 const SUPPORTED_HARDWARE_BREAKPOINTS: usize = 0;
 
 struct LinuxThread {
@@ -329,7 +329,7 @@ impl LinuxTarget {
         &mut self,
         breakpoint: HardwareBreakpoint,
     ) -> Result<usize, Box<dyn std::error::Error>> {
-        #[cfg(target_arch = "x86_64")]
+        #[cfg(feature = "x86_64")]
         {
             let index = if let Some(empty) = self.find_empty_watchpoint() {
                 empty
@@ -380,7 +380,7 @@ impl LinuxTarget {
 
             Ok(index)
         }
-        #[cfg(not(target_arch = "x86_64"))]
+        #[cfg(not(feature = "x86_64"))]
         Err(Box::new(HardwareBreakpointError::UnsupportedPlatform))
     }
 
@@ -388,7 +388,7 @@ impl LinuxTarget {
         &mut self,
         index: usize,
     ) -> Result<HardwareBreakpoint, Box<dyn std::error::Error>> {
-        #[cfg(target_arch = "x86_64")]
+        #[cfg(feature = "x86_64")]
         {
             if self.hardware_breakpoints[index].is_none() {
                 return Err(Box::new(HardwareBreakpointError::DoesNotExist(index)));
@@ -426,7 +426,7 @@ impl LinuxTarget {
             Ok(watchpoint.unwrap())
         }
 
-        #[cfg(not(target_arch = "x86_64"))]
+        #[cfg(not(feature = "x86_64"))]
         Err(Box::new(HardwareBreakpointError::UnsupportedPlatform))
     }
 
@@ -445,7 +445,7 @@ impl LinuxTarget {
     pub fn is_hardware_breakpoint_triggered(
         &self,
     ) -> Result<Option<usize>, Box<dyn std::error::Error>> {
-        #[cfg(target_arch = "x86_64")]
+        #[cfg(feature = "x86_64")]
         {
             let mut dr7 = self.ptrace_peekuser((*DEBUG_REG_OFFSET + 6 * 8) as *mut libc::c_void)?;
 
@@ -471,7 +471,7 @@ impl LinuxTarget {
             Ok(None)
         }
 
-        #[cfg(not(target_arch = "x86_64"))]
+        #[cfg(not(feature = "x86_64"))]
         Err(Box::new(HardwareBreakpointError::UnsupportedPlatform))
     }
 
@@ -524,7 +524,7 @@ impl LinuxTarget {
     }
 
     // Temporary function until ptrace_peekuser is fixed in nix crate
-    #[cfg(target_arch = "x86_64")]
+    #[cfg(feature = "x86_64")]
     fn ptrace_peekuser(
         &self,
         addr: *mut libc::c_void,
