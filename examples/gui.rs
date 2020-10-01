@@ -10,7 +10,7 @@ fn main() {
 
 #[cfg(target_os = "linux")]
 mod example {
-    use std::time::Instant;
+    use std::{process::Command, time::Instant};
 
     use clipboard::{ClipboardContext, ClipboardProvider};
     use glium::{
@@ -198,9 +198,8 @@ mod example {
                     }
                 } else {
                     if ui.small_button(im_str!("launch")) {
-                        context.set_remote(
-                            LinuxTarget::launch(context.target_name.to_str()).unwrap().0,
-                        );
+                        let cmd = Command::new(context.target_name.to_str());
+                        context.set_remote(LinuxTarget::launch(cmd).unwrap().0);
                     }
                 }
             });

@@ -1,10 +1,9 @@
 use nix::{
     sys::ptrace,
     sys::wait::{waitpid, WaitStatus},
-    unistd::{execv, fork, ForkResult, Pid},
+    unistd::Pid,
 };
-use std::ffi::CString;
-use std::process;
+use std::process::Command;
 
 /// This trait defines the common behavior for all *nix targets
 pub trait UnixTarget {
@@ -41,40 +40,27 @@ pub trait UnixTarget {
 
 /// Launch a new debuggee process.
 pub(in crate::target) fn launch(
-    path: CString,
+    mut cmd: Command,
 ) -> Result<(Pid, WaitStatus), Box<dyn std::error::Error>> {
-    // We start the debuggee by forking the parent process.
-    // The child process invokes `ptrace(2)` with the `PTRACE_TRACEME` parameter to enable debugging features for the parent.
-    // This requires a user to have a `SYS_CAP_PTRACE` permission. See `man capabilities(7)` for more information.
-    match fork()? {
-        ForkResult::Parent { child, .. } => {
-            let status = waitpid(child, None)?;
-
-            Ok((child, status))
-        }
-        ForkResult::Child => {
-            if let Err(err) = ptrace::traceme() {
-                println!("ptrace traceme failed: {:?}", err);
-                process::abort()
-            }
-
+    use std::os::unix::process::CommandExt;
+    unsafe {
+        cmd.pre_exec(|| {
             // Disable ASLR
             #[cfg(target_os = "linux")]
-            unsafe {
+            {
                 const ADDR_NO_RANDOMIZE: libc::c_ulong = 0x0040000;
                 libc::personality(ADDR_NO_RANDOMIZE);
             }
 
-            if let Err(err) = execv(&path, &[path.as_ref()]) {
-                println!("execv failed: {:?}", err);
-                process::abort();
-            }
+            ptrace::traceme().map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err))?;
 
-            // execv replaces the process image, so this place in code will not be reached.
-            println!("Unreachable code reached");
-            process::abort();
-        }
+            Ok(())
+        });
     }
+    let child = cmd.spawn()?;
+    let pid = Pid::from_raw(child.id() as i32);
+    let status = waitpid(pid, None)?;
+    Ok((pid, status))
 }
 
 /// Attach existing process as a debugee.
