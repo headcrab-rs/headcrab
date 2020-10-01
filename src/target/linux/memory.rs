@@ -87,7 +87,7 @@ impl MemoryOp {
 pub(crate) fn split_protected<'a>(
     protected_maps: &'a [MemoryMap],
     operations: impl Iterator<Item = MemoryOp>,
-) -> Result<(Vec<MemoryOp>, Vec<MemoryOp>), Box<dyn std::error::Error>> {
+) -> (Vec<MemoryOp>, Vec<MemoryOp>) {
     let (protected, permissioned): (_, Vec<_>) = operations.partition(|op| {
         protected_maps
             .binary_search_by(|map| {
@@ -102,5 +102,5 @@ pub(crate) fn split_protected<'a>(
             .is_ok()
     });
 
-    Ok((protected, permissioned))
+    (protected, permissioned)
 }

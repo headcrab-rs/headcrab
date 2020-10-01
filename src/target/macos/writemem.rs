@@ -1,6 +1,8 @@
 use mach::{kern_return, message::mach_msg_type_number_t, port, vm, vm_types::*};
 use std::{io, marker::PhantomData, mem};
 
+use crate::CrabResult;
+
 /// Allows to write data to different locations in debuggee's memory as a single operation.
 pub struct WriteMemory<'a> {
     target_port: port::mach_port_name_t,
@@ -27,7 +29,7 @@ impl<'a> WriteMemory<'a> {
     }
 
     /// Executes the memory write operation.
-    pub fn apply(self) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn apply(self) -> CrabResult<()> {
         for write_op in &self.write_ops {
             let res = unsafe {
                 vm::mach_vm_write(

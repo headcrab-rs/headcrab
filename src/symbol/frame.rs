@@ -50,7 +50,7 @@ impl<'a> Frame<'a> {
 
                     Ok(SearchAction::VisitChildren)
                 })
-                .map_err(|e: Box<dyn std::error::Error>| e)
+                .map_err(|e: Box<dyn std::error::Error + Send + Sync>| e)
                 .unwrap();
         } else {
             println!("no dwarf entry for function");
@@ -59,13 +59,13 @@ impl<'a> Frame<'a> {
 
     pub fn each_argument<
         C: super::dwarf_utils::EvalContext,
-        F: Fn(Local<'_, 'a>) -> Result<(), Box<dyn std::error::Error>>,
+        F: Fn(Local<'_, 'a>) -> CrabResult<()>,
     >(
         &self,
         eval_ctx: &C,
         addr: u64,
         f: F,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> CrabResult<()> {
         let (dwarf, unit, dw_die_offset) = self
             .function_debuginfo()
             .ok_or_else(|| "No dwarf debuginfo for function".to_owned())?;
@@ -86,13 +86,13 @@ impl<'a> Frame<'a> {
 
     pub fn each_local<
         C: super::dwarf_utils::EvalContext,
-        F: Fn(Local<'_, 'a>) -> Result<(), Box<dyn std::error::Error>>,
+        F: Fn(Local<'_, 'a>) -> CrabResult<()>,
     >(
         &self,
         eval_ctx: &C,
         addr: u64,
         f: F,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> CrabResult<()> {
         let (dwarf, unit, dw_die_offset) = self
             .function_debuginfo()
             .ok_or_else(|| "No dwarf debuginfo for function".to_owned())?;
@@ -154,7 +154,7 @@ impl<'ctx> LocalValue<'ctx> {
         &self,
         ty: &gimli::DebuggingInformationEntry<'_, '_, Reader<'ctx>>,
         eval_ctx: &impl super::dwarf_utils::EvalContext,
-    ) -> Result<Option<PrimitiveValue>, Box<dyn std::error::Error>> {
+    ) -> CrabResult<Option<PrimitiveValue>> {
         match ty.tag() {
             gimli::DW_TAG_base_type => {
                 let size = dwarf_attr!(udata ty.DW_AT_byte_size || error);
@@ -258,7 +258,7 @@ impl<'a, 'ctx> Local<'a, 'ctx> {
         entry: gimli::DebuggingInformationEntry<'a, 'a, Reader<'ctx>>,
         eval_ctx: &C,
         addr: u64,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
+    ) -> CrabResult<Self> {
         let origin_entry = if let Some(origin) = entry.attr(gimli::DW_AT_abstract_origin)? {
             let origin = match origin.value() {
                 gimli::AttributeValue::UnitRef(offset) => offset,

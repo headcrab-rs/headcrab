@@ -3,14 +3,14 @@
 mod test_utils;
 
 #[cfg(target_os = "linux")]
-use headcrab::{symbol::RelocatedDwarf, target::UnixTarget};
+use headcrab::{symbol::RelocatedDwarf, target::UnixTarget, CrabResult};
 
 static BIN_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/testees/hw_breakpoint");
 
 // FIXME: Running this test just for linux because of privileges issue on macOS. Enable for everything after fixing.
 #[cfg(target_os = "linux")]
 #[test]
-fn hardware_breakpoint() -> Result<(), Box<dyn std::error::Error>> {
+fn hardware_breakpoint() -> CrabResult<()> {
     use headcrab::target::{HardwareBreakpoint, HardwareBreakpointSize, HardwareBreakpointType};
 
     test_utils::ensure_testees();

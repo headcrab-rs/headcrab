@@ -7,7 +7,7 @@ use std::ffi::CString;
 mod test_utils;
 
 #[cfg(target_os = "linux")]
-use headcrab::{symbol::Dwarf, target::AttachOptions, target::LinuxTarget};
+use headcrab::{symbol::Dwarf, target::AttachOptions, target::LinuxTarget, CrabResult};
 
 static BIN_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/testees/longer_hello");
 
@@ -16,7 +16,7 @@ static BIN_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/testees/long
 #[ignore]
 #[cfg(target_os = "linux")]
 #[test]
-fn attach_readmem() -> Result<(), Box<dyn std::error::Error>> {
+fn attach_readmem() -> CrabResult<()> {
     test_utils::ensure_testees();
 
     let debuginfo = Dwarf::new(BIN_PATH)?;

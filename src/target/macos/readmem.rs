@@ -1,6 +1,8 @@
 use mach::{kern_return, port, vm, vm_types::*};
 use std::{io, marker::PhantomData, mem};
 
+use crate::CrabResult;
+
 /// A single memory read operation.
 struct ReadOp {
     // Remote memory location.
@@ -50,7 +52,7 @@ impl<'a> ReadMemory<'a> {
     }
 
     /// Executes the memory read operation.
-    pub fn apply(self) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn apply(self) -> CrabResult<()> {
         for read_op in &self.read_ops {
             unsafe {
                 let mut data_size: mach_vm_size_t = 0;

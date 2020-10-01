@@ -1,14 +1,14 @@
 // FIXME make this work on other systems too.
 #![cfg(all(target_arch = "x86_64", target_os = "linux"))]
 
-use std::{collections::HashMap, error::Error};
+use std::collections::HashMap;
 
 use cranelift_codegen::{
     binemit, ir,
     isa::{self, TargetIsa},
     settings::{self, Configurable},
 };
-use headcrab::target::LinuxTarget;
+use headcrab::{target::LinuxTarget, CrabResult};
 
 mod memory;
 
@@ -67,7 +67,7 @@ pub struct InjectionContext<'a> {
 }
 
 impl<'a> InjectionContext<'a> {
-    pub fn new(target: &'a LinuxTarget) -> Result<Self, Box<dyn Error>> {
+    pub fn new(target: &'a LinuxTarget) -> CrabResult<Self> {
         let mut inj_ctx = Self {
             target,
             code: Memory::new_executable(),
@@ -97,7 +97,7 @@ impl<'a> InjectionContext<'a> {
     }
 
     /// Allocate a new stack and return the bottom of the stack.
-    pub fn new_stack(&mut self, size: u64) -> Result<u64, Box<dyn Error>> {
+    pub fn new_stack(&mut self, size: u64) -> CrabResult<u64> {
         let stack = self.allocate_readwrite(size)?;
 
         // Ensure that we hit a breakpoint trap when returning from the injected function.
@@ -113,15 +113,15 @@ impl<'a> InjectionContext<'a> {
         Ok(stack + size - std::mem::size_of::<usize>() as u64)
     }
 
-    pub fn allocate_code(&mut self, size: u64) -> Result<u64, Box<dyn Error>> {
+    pub fn allocate_code(&mut self, size: u64) -> CrabResult<u64> {
         self.code.allocate(self.target, size, 8)
     }
 
-    pub fn allocate_readonly(&mut self, size: u64) -> Result<u64, Box<dyn Error>> {
+    pub fn allocate_readonly(&mut self, size: u64) -> CrabResult<u64> {
         self.readonly.allocate(self.target, size, 8)
     }
 
-    pub fn allocate_readwrite(&mut self, size: u64) -> Result<u64, Box<dyn Error>> {
+    pub fn allocate_readwrite(&mut self, size: u64) -> CrabResult<u64> {
         self.readwrite.allocate(self.target, size, 8)
     }
 
@@ -145,7 +145,7 @@ impl<'a> InjectionContext<'a> {
         &mut self,
         data_id: DataId,
         bytes: &[u8],
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> CrabResult<()> {
         let alloc = self.allocate_readonly(bytes.len() as u64)?;
         self.target
             .write()
@@ -170,7 +170,7 @@ pub fn compile_clif_code(
     inj_ctx: &mut InjectionContext,
     isa: &dyn TargetIsa,
     ctx: &mut Context,
-) -> Result<(), Box<dyn Error>> {
+) -> CrabResult<()> {
     let mut code_mem = Vec::new();
     let mut relocs = VecRelocSink::default();
 
@@ -245,7 +245,7 @@ pub fn inject_clif_code(
     inj_ctx: &mut InjectionContext,
     lookup_symbol: &dyn Fn(&str) -> u64,
     code: &str,
-) -> Result<u64, Box<dyn Error>> {
+) -> CrabResult<u64> {
     let mut run_function = None;
 
     for line in code.lines() {

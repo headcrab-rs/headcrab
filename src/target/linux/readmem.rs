@@ -2,6 +2,7 @@ use super::{
     memory::{split_protected, MemoryOp},
     LinuxTarget,
 };
+use crate::CrabResult;
 use nix::{sys::ptrace, unistd::Pid};
 use std::{marker::PhantomData, mem};
 
@@ -113,7 +114,7 @@ impl<'a> ReadMemory<'a> {
     }
 
     /// Executes the memory read operation.
-    pub fn apply(self) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn apply(self) -> CrabResult<()> {
         let pid = self.target.pid;
         let read_len = self
             .read_ops
@@ -138,8 +139,7 @@ impl<'a> ReadMemory<'a> {
                 .filter(|map| !map.is_readable)
                 .collect::<Vec<_>>();
 
-            let (protected, readable) =
-                split_protected(&protected_maps, self.read_ops.into_iter())?;
+            let (protected, readable) = split_protected(&protected_maps, self.read_ops.into_iter());
 
             Self::read_process_vm(pid, &readable)?;
             Self::read_ptrace(pid, &protected)?;
@@ -181,7 +181,7 @@ impl<'a> ReadMemory<'a> {
 
     /// Allows to read from protected memory pages.
     /// This operation results in multiple system calls and is inefficient.
-    fn read_ptrace(pid: Pid, read_ops: &[MemoryOp]) -> Result<(), Box<dyn std::error::Error>> {
+    fn read_ptrace(pid: Pid, read_ops: &[MemoryOp]) -> CrabResult<()> {
         let long_size = std::mem::size_of::<std::os::raw::c_long>();
 
         for read_op in read_ops {

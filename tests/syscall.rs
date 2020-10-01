@@ -3,14 +3,14 @@
 mod test_utils;
 
 #[cfg(target_os = "linux")]
-use headcrab::target::UnixTarget;
+use headcrab::{target::UnixTarget, CrabResult};
 
 static BIN_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/testees/hello");
 
 // FIXME: Running this test just for linux because of privileges issue on macOS. Enable for everything after fixing.
 #[cfg(target_os = "linux")]
 #[test]
-fn syscall() -> Result<(), Box<dyn std::error::Error>> {
+fn syscall() -> CrabResult<()> {
     test_utils::ensure_testees();
 
     let target = test_utils::launch(BIN_PATH);

@@ -33,7 +33,7 @@ pub enum HardwareBreakpointSize {
     _8 = 0b10,
 }
 impl HardwareBreakpointSize {
-    pub fn from_usize(size: usize) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn from_usize(size: usize) -> crate::CrabResult<Self> {
         match size {
             1 => Ok(Self::_1),
             2 => Ok(Self::_2),

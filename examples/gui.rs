@@ -20,6 +20,7 @@ mod example {
     };
     use headcrab::{
         symbol::DisassemblySource, symbol::RelocatedDwarf, target::LinuxTarget, target::UnixTarget,
+        CrabResult,
     };
     use imgui::{im_str, ClipboardBackend, Condition, FontSource, ImStr, ImString};
     use imgui_glium_renderer::Renderer;
@@ -130,7 +131,7 @@ mod example {
     }
 
     impl HeadcrabContext {
-        fn remote(&self) -> Result<&LinuxTarget, Box<dyn std::error::Error>> {
+        fn remote(&self) -> CrabResult<&LinuxTarget> {
             if let Some(remote) = &self.remote {
                 Ok(remote)
             } else {
@@ -144,14 +145,14 @@ mod example {
             self.debuginfo = None;
         }
 
-        fn reload_debuginfo(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        fn reload_debuginfo(&mut self) -> CrabResult<()> {
             // FIXME only reload debuginfo when necessary (memory map changed)
             let memory_maps = self.remote()?.memory_maps()?;
             self.debuginfo = Some(RelocatedDwarf::from_maps(&memory_maps)?);
             Ok(())
         }
 
-        fn load_debuginfo_if_necessary(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        fn load_debuginfo_if_necessary(&mut self) -> CrabResult<()> {
             if self.debuginfo.is_none() {
                 let memory_maps = self.remote()?.memory_maps()?;
                 self.debuginfo = Some(RelocatedDwarf::from_maps(&memory_maps)?);
@@ -208,7 +209,7 @@ mod example {
                 .position([400.0, 5.0], Condition::FirstUseEver)
                 .size([395.0, 390.0], Condition::FirstUseEver)
                 .build(ui, || {
-                    if let Err(err) = (|| -> Result<(), Box<dyn std::error::Error>> {
+                    if let Err(err) = (|| -> CrabResult<()> {
                         let ip = remote.read_regs()?.rip;
                         let mut code = [0; 64];
                         unsafe {
@@ -225,7 +226,7 @@ mod example {
                 .position([5.0, 100.0], Condition::FirstUseEver)
                 .size([390.0, 295.0], Condition::FirstUseEver)
                 .build(ui, || {
-                    if let Err(err) = (|| -> Result<(), Box<dyn std::error::Error>> {
+                    if let Err(err) = (|| -> CrabResult<()> {
                         ui.radio_button(
                             im_str!("frame-ptr"),
                             &mut context.backtrace_type,
@@ -359,9 +360,7 @@ mod example {
     /// breakpoint. This is useful while we don't have support for setting breakpoints at
     /// runtime yet.
     /// FIXME remove once real breakpoint support is added
-    fn patch_breakpoint_function(
-        context: &mut HeadcrabContext,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn patch_breakpoint_function(context: &mut HeadcrabContext) -> CrabResult<()> {
         context.load_debuginfo_if_necessary()?;
         // Test that `a_function` resolves to a function.
         let breakpoint_addr = context.debuginfo().get_symbol_address("breakpoint").unwrap() + 4 /* prologue */;

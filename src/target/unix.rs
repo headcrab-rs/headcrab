@@ -5,33 +5,35 @@ use nix::{
 };
 use std::process::Command;
 
+use crate::CrabResult;
+
 /// This trait defines the common behavior for all *nix targets
 pub trait UnixTarget {
     /// Provides the Pid of the debugee process
     fn pid(&self) -> Pid;
 
     /// Step the debuggee one instruction further.
-    fn step(&self) -> Result<WaitStatus, Box<dyn std::error::Error>> {
+    fn step(&self) -> CrabResult<WaitStatus> {
         ptrace::step(self.pid(), None)?;
         let status = waitpid(self.pid(), None)?;
         Ok(status)
     }
 
     /// Continues execution of a debuggee.
-    fn unpause(&self) -> Result<WaitStatus, Box<dyn std::error::Error>> {
+    fn unpause(&self) -> CrabResult<WaitStatus> {
         ptrace::cont(self.pid(), None)?;
         let status = waitpid(self.pid(), None)?;
         Ok(status)
     }
 
     /// Detach from the debuggee, continuing its execution.
-    fn detach(&self) -> Result<(), Box<dyn std::error::Error>> {
+    fn detach(&self) -> CrabResult<()> {
         ptrace::detach(self.pid(), None)?;
         Ok(())
     }
 
     /// Kills the debuggee.
-    fn kill(&self) -> Result<WaitStatus, Box<dyn std::error::Error>> {
+    fn kill(&self) -> CrabResult<WaitStatus> {
         ptrace::kill(self.pid())?;
         let status = waitpid(self.pid(), None)?;
         Ok(status)
@@ -39,9 +41,7 @@ pub trait UnixTarget {
 }
 
 /// Launch a new debuggee process.
-pub(in crate::target) fn launch(
-    mut cmd: Command,
-) -> Result<(Pid, WaitStatus), Box<dyn std::error::Error>> {
+pub(in crate::target) fn launch(mut cmd: Command) -> CrabResult<(Pid, WaitStatus)> {
     use std::os::unix::process::CommandExt;
     unsafe {
         cmd.pre_exec(|| {
@@ -64,7 +64,7 @@ pub(in crate::target) fn launch(
 }
 
 /// Attach existing process as a debugee.
-pub(in crate::target) fn attach(pid: Pid) -> Result<WaitStatus, Box<dyn std::error::Error>> {
+pub(in crate::target) fn attach(pid: Pid) -> CrabResult<WaitStatus> {
     ptrace::attach(pid)?;
     let status = waitpid(pid, None)?;
     Ok(status)

@@ -16,6 +16,7 @@ mod example {
     use headcrab::{
         symbol::{DisassemblySource, RelocatedDwarf, Snippet},
         target::{AttachOptions, LinuxTarget, UnixTarget},
+        CrabResult,
     };
 
     #[cfg(target_os = "linux")]
@@ -142,7 +143,7 @@ mod example {
     }
 
     impl Context {
-        fn remote(&self) -> Result<&LinuxTarget, Box<dyn std::error::Error>> {
+        fn remote(&self) -> CrabResult<&LinuxTarget> {
             if let Some(remote) = &self.remote {
                 Ok(remote)
             } else {
@@ -150,7 +151,7 @@ mod example {
             }
         }
 
-        fn mut_remote(&mut self) -> Result<&mut LinuxTarget, Box<dyn std::error::Error>> {
+        fn mut_remote(&mut self) -> CrabResult<&mut LinuxTarget> {
             if let Some(remote) = &mut self.remote {
                 Ok(remote)
             } else {
@@ -164,7 +165,7 @@ mod example {
             self.debuginfo = None;
         }
 
-        fn load_debuginfo_if_necessary(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        fn load_debuginfo_if_necessary(&mut self) -> CrabResult<()> {
             // FIXME only reload debuginfo when necessary (memory map changed)
             let memory_maps = self.remote()?.memory_maps()?;
             self.debuginfo = Some(RelocatedDwarf::from_maps(&memory_maps)?);
@@ -302,11 +303,7 @@ mod example {
         }
     }
 
-    fn run_command(
-        context: &mut Context,
-        color: bool,
-        command: &str,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn run_command(context: &mut Context, color: bool, command: &str) -> CrabResult<()> {
         if command == "" {
             return Ok(());
         } else if command == "_patch_breakpoint_function" {
@@ -393,10 +390,7 @@ mod example {
         Ok(())
     }
 
-    fn set_breakpoint(
-        context: &mut Context,
-        location: &str,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn set_breakpoint(context: &mut Context, location: &str) -> CrabResult<()> {
         context.load_debuginfo_if_necessary()?;
 
         if let Ok(addr) = {
@@ -430,7 +424,7 @@ mod example {
     /// breakpoint. This is useful while we don't have support for setting breakpoints at
     /// runtime yet.
     /// FIXME remove once real breakpoint support is added
-    fn patch_breakpoint_function(context: &mut Context) -> Result<(), Box<dyn std::error::Error>> {
+    fn patch_breakpoint_function(context: &mut Context) -> CrabResult<()> {
         context.load_debuginfo_if_necessary()?;
         // Test that `a_function` resolves to a function.
         let breakpoint_addr = context.debuginfo().get_symbol_address("breakpoint").unwrap() + 4 /* prologue */;
@@ -463,10 +457,7 @@ mod example {
         Ok(())
     }
 
-    fn show_backtrace(
-        context: &mut Context,
-        bt_type: &BacktraceType,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn show_backtrace(context: &mut Context, bt_type: &BacktraceType) -> CrabResult<()> {
         let call_stack: Vec<_> = get_call_stack(context, bt_type)?;
         for func in call_stack {
             let res = context
@@ -522,7 +513,7 @@ mod example {
         Ok(())
     }
 
-    fn show_locals(context: &mut Context) -> Result<(), Box<dyn std::error::Error>> {
+    fn show_locals(context: &mut Context) -> CrabResult<()> {
         let regs = context.remote()?.read_regs()?;
         let func = regs.rip as usize;
         let res = context.debuginfo().with_addr_frames(
@@ -609,10 +600,7 @@ mod example {
         Ok(())
     }
 
-    fn get_call_stack(
-        context: &mut Context,
-        bt_type: &BacktraceType,
-    ) -> Result<Vec<usize>, Box<dyn std::error::Error>> {
+    fn get_call_stack(context: &mut Context, bt_type: &BacktraceType) -> CrabResult<Vec<usize>> {
         context.load_debuginfo_if_necessary()?;
 
         let regs = context.remote()?.read_regs()?;
@@ -668,7 +656,7 @@ mod example {
     fn print_source_for_top_of_stack_symbol(
         context: &mut Context,
         context_lines: usize,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> CrabResult<()> {
         let call_stack = get_call_stack(context, &BacktraceType::default())?;
         let top_of_stack = call_stack[0];
         context
@@ -773,7 +761,7 @@ mod example {
         kind: &str,
         eval_ctx: &X86_64EvalContext,
         local: headcrab::symbol::Local<'_, 'ctx>,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> CrabResult<()> {
         let value = match local.value() {
             value @ headcrab::symbol::LocalValue::Pieces(_)
             | value @ headcrab::symbol::LocalValue::Const(_) => {
@@ -810,17 +798,14 @@ mod example {
     }
 
     #[cfg(not(target_os = "linux"))]
-    fn inject_clif(
-        _context: &mut Context,
-        _file: PathBuf,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn inject_clif(_context: &mut Context, _file: PathBuf) -> CrabResult<()> {
         Err("injectclif is currently only supported on Linux"
             .to_string()
             .into())
     }
 
     #[cfg(target_os = "linux")]
-    fn inject_clif(context: &mut Context, file: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+    fn inject_clif(context: &mut Context, file: PathBuf) -> CrabResult<()> {
         context.load_debuginfo_if_necessary()?;
 
         let mut inj_ctx = InjectionContext::new(context.remote()?)?;
@@ -856,17 +841,14 @@ mod example {
     }
 
     #[cfg(not(target_os = "linux"))]
-    fn inject_lib(
-        _context: &mut Context,
-        _file: PathBuf,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn inject_lib(_context: &mut Context, _file: PathBuf) -> CrabResult<()> {
         Err("injectclif is currently only supported on Linux"
             .to_string()
             .into())
     }
 
     #[cfg(target_os = "linux")]
-    fn inject_lib(context: &mut Context, file: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+    fn inject_lib(context: &mut Context, file: PathBuf) -> CrabResult<()> {
         context.load_debuginfo_if_necessary()?;
 
         let mut inj_ctx = InjectionContext::new(context.remote()?)?;
