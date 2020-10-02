@@ -1,5 +1,6 @@
 use super::memory::{split_protected, MemoryOp};
 use super::LinuxTarget;
+use crate::CrabResult;
 use nix::{sys::ptrace, unistd::Pid};
 use std::{cmp, marker::PhantomData, mem, slice};
 
@@ -65,7 +66,7 @@ impl<'a> WriteMemory<'a> {
     ///
     /// It's a user's responsibility to ensure that debuggee memory addresses are valid.
     /// This function only reads memory from the local process.
-    pub fn apply(self) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn apply(self) -> CrabResult<()> {
         let protected_maps = self
             .target
             .memory_maps()?
@@ -73,7 +74,7 @@ impl<'a> WriteMemory<'a> {
             .filter(|map| !map.is_writable)
             .collect::<Vec<_>>();
 
-        let (protected, writable) = split_protected(&protected_maps, self.write_ops.into_iter())?;
+        let (protected, writable) = split_protected(&protected_maps, self.write_ops.into_iter());
 
         // Break write operations into word groups.
         let protected_groups = protected
@@ -93,7 +94,7 @@ impl<'a> WriteMemory<'a> {
     /// Executes memory writing operations using ptrace only.
     /// This function should be used only for testing purposes.
     #[cfg(test)]
-    unsafe fn apply_ptrace(self) -> Result<(), Box<dyn std::error::Error>> {
+    unsafe fn apply_ptrace(self) -> CrabResult<()> {
         write_ptrace(
             self.target.pid,
             self.write_ops
@@ -160,7 +161,7 @@ impl Iterator for WordSizedOps {
 pub(crate) unsafe fn write_ptrace(
     pid: Pid,
     write_ops: impl Iterator<Item = MemoryOp>,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> CrabResult<()> {
     for op in write_ops {
         assert!(op.local_ptr_len <= WORD_SIZE);
 
@@ -190,10 +191,7 @@ pub(crate) unsafe fn write_ptrace(
 
 /// Allows to write data to different locations in debuggee's memory as a single operation.
 /// It requires a memory page to be writable.
-pub(crate) unsafe fn write_process_vm(
-    pid: Pid,
-    write_ops: &[WriteOp],
-) -> Result<(), Box<dyn std::error::Error>> {
+pub(crate) unsafe fn write_process_vm(pid: Pid, write_ops: &[WriteOp]) -> CrabResult<()> {
     // Create a list of `IoVec`s and remote `IoVec`s
     let remote_iov = write_ops
         .iter()

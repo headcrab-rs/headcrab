@@ -2,7 +2,7 @@
 
 use std::mem;
 
-use headcrab::target::LinuxTarget;
+use headcrab::{target::LinuxTarget, CrabResult};
 
 /// Round `size` up to the nearest multiple of `page_size`.
 fn round_up_to_page_size(size: u64, page_size: u64) -> u64 {
@@ -23,11 +23,7 @@ impl PtrLen {
 
     /// Create a new `PtrLen` pointing to at least `size` bytes of memory,
     /// suitably sized and aligned for memory protection.
-    fn with_size(
-        target: &LinuxTarget,
-        size: u64,
-        prot: libc::c_int,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
+    fn with_size(target: &LinuxTarget, size: u64, prot: libc::c_int) -> CrabResult<Self> {
         let page_size = *headcrab::target::PAGE_SIZE as u64;
         let alloc_size = round_up_to_page_size(size, page_size);
         let ptr = target.mmap(
@@ -92,12 +88,7 @@ impl Memory {
         }
     }
 
-    pub fn allocate(
-        &mut self,
-        target: &LinuxTarget,
-        size: u64,
-        align: u8,
-    ) -> Result<u64, Box<dyn std::error::Error>> {
+    pub fn allocate(&mut self, target: &LinuxTarget, size: u64, align: u8) -> CrabResult<u64> {
         if self.position % align as u64 != 0 {
             self.position += align as u64 - self.position % align as u64;
             debug_assert!(self.position % align as u64 == 0);

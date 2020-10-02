@@ -3,6 +3,8 @@ use capstone::Capstone;
 use std::fs::File;
 use std::io::{prelude::*, BufReader};
 
+use crate::CrabResult;
+
 pub struct DisassemblySource(Capstone);
 
 impl Default for DisassemblySource {
@@ -27,7 +29,7 @@ impl DisassemblySource {
         bytes: &[u8],
         addr: u64,
         show_address: bool,
-    ) -> Result<String, Box<dyn std::error::Error>> {
+    ) -> CrabResult<String> {
         use std::fmt::Write;
 
         let mut fmt = String::new();
@@ -51,10 +53,7 @@ impl DisassemblySource {
 }
 
 impl super::Dwarf {
-    pub fn source_location(
-        &self,
-        addr: usize,
-    ) -> Result<(String, u64, u64), Box<dyn std::error::Error>> {
+    pub fn source_location(&self, addr: usize) -> CrabResult<(String, u64, u64)> {
         self.rent(|parsed| {
             let addr2line: &addr2line::Context<_> = &parsed.addr2line;
             println!("{:08x}", addr);
@@ -73,7 +72,7 @@ impl super::Dwarf {
         })
     }
 
-    pub fn source_snippet(&self, addr: usize) -> Result<String, Box<dyn std::error::Error>> {
+    pub fn source_snippet(&self, addr: usize) -> CrabResult<String> {
         let (file, line, _column) = self.source_location(addr)?;
         let file = std::fs::read_to_string(file)?;
         Ok(file
@@ -83,8 +82,6 @@ impl super::Dwarf {
             .to_string())
     }
 }
-
-pub type CrabResult<T> = Result<T, Box<dyn std::error::Error>>;
 
 /// A line in a source code is represented as a line number and the string.
 #[derive(Debug)]

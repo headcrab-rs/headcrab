@@ -1,6 +1,7 @@
 use gimli::{DebuggingInformationEntry, Dwarf, Unit, UnitOffset, ValueType};
 
 use super::Reader;
+use crate::CrabResult;
 
 macro_rules! dwarf_attr {
     (str($dwarf:ident,$unit:ident) $entry:ident.$name:ident || $missing:ident) => {
@@ -175,7 +176,7 @@ pub trait EvalContext {
 fn value_type_from_base_type(
     unit: &Unit<Reader<'_>>,
     base_type: UnitOffset,
-) -> Result<ValueType, Box<dyn std::error::Error>> {
+) -> CrabResult<ValueType> {
     if base_type.0 == 0 {
         Ok(ValueType::Generic)
     } else {
@@ -188,7 +189,7 @@ pub fn evaluate_expression<'a>(
     unit: &gimli::Unit<Reader<'a>>,
     expr: gimli::Expression<Reader<'a>>,
     eval_ctx: &impl EvalContext,
-) -> Result<Vec<gimli::Piece<Reader<'a>>>, Box<dyn std::error::Error>> {
+) -> CrabResult<Vec<gimli::Piece<Reader<'a>>>> {
     let mut eval = expr.evaluation(unit.encoding());
     let mut res = eval.evaluate()?;
     loop {

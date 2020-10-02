@@ -6,6 +6,7 @@ mod writemem;
 
 use crate::target::thread::Thread;
 use crate::target::unix::{self, UnixTarget};
+use crate::CrabResult;
 use nix::sys::ptrace;
 use nix::sys::wait::{waitpid, WaitStatus};
 use nix::unistd::{getpid, Pid};
@@ -54,7 +55,7 @@ impl LinuxThread {
 impl Thread for LinuxThread {
     type ThreadId = i32;
 
-    fn name(&self) -> Result<Option<String>, Box<dyn std::error::Error>> {
+    fn name(&self) -> CrabResult<Option<String>> {
         match self.task.stat() {
             Ok(t_stat) => Ok(Some(t_stat.comm.clone())),
             Err(ProcError::NotFound(_)) | Err(ProcError::Incomplete(_)) => {
@@ -94,7 +95,7 @@ impl UnixTarget for LinuxTarget {
         self.pid
     }
 
-    fn unpause(&self) -> Result<WaitStatus, Box<dyn std::error::Error>> {
+    fn unpause(&self) -> CrabResult<WaitStatus> {
         self.handle_breakpoint()?;
         ptrace::cont(self.pid(), None)?;
         let status = waitpid(self.pid(), None)?;
@@ -116,11 +117,11 @@ impl UnixTarget for LinuxTarget {
         Ok(status)
     }
 
-    fn step(&self) -> Result<WaitStatus, Box<dyn std::error::Error>> {
+    fn step(&self) -> CrabResult<WaitStatus> {
         let status = self.handle_breakpoint()?;
         match status {
             None => {
-                ptrace::step(self.pid(), None).map_err(|e| Box::new(e))?;
+                ptrace::step(self.pid(), None)?;
                 Ok(waitpid(self.pid(), None)?)
             }
             Some(status) => Ok(status),
@@ -134,7 +135,7 @@ impl LinuxTarget {
     /// returns true if it executed an instruction, false otherwise
     /// The function may not execute the instrumented instruction if the
     /// P.C is not where the breakpoint was set
-    fn handle_breakpoint(&self) -> Result<Option<WaitStatus>, Box<dyn std::error::Error>> {
+    fn handle_breakpoint(&self) -> CrabResult<Option<WaitStatus>> {
         let mut status = None;
 
         let bp = { self.hit_breakpoint.borrow_mut().take() };
@@ -166,9 +167,7 @@ impl LinuxTarget {
     }
 
     /// Launches a new debuggee process
-    pub fn launch(
-        cmd: Command,
-    ) -> Result<(LinuxTarget, nix::sys::wait::WaitStatus), Box<dyn std::error::Error>> {
+    pub fn launch(cmd: Command) -> CrabResult<(LinuxTarget, nix::sys::wait::WaitStatus)> {
         let (pid, status) = unix::launch(cmd)?;
         let target = LinuxTarget::new(pid);
         target.kill_on_exit()?;
@@ -176,10 +175,7 @@ impl LinuxTarget {
     }
 
     /// Attaches process as a debuggee.
-    pub fn attach(
-        pid: Pid,
-        options: AttachOptions,
-    ) -> Result<(LinuxTarget, WaitStatus), Box<dyn std::error::Error>> {
+    pub fn attach(pid: Pid, options: AttachOptions) -> CrabResult<(LinuxTarget, WaitStatus)> {
         let status = unix::attach(pid)?;
         let target = LinuxTarget::new(pid);
 
@@ -206,15 +202,12 @@ impl LinuxTarget {
     }
 
     /// Reads the register values from the main thread of a debuggee process.
-    pub fn read_regs(&self) -> Result<libc::user_regs_struct, Box<dyn std::error::Error>> {
+    pub fn read_regs(&self) -> CrabResult<libc::user_regs_struct> {
         nix::sys::ptrace::getregs(self.pid()).map_err(|err| err.into())
     }
 
     /// Writes the register values for the main thread of a debuggee process.
-    pub fn write_regs(
-        &self,
-        regs: libc::user_regs_struct,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn write_regs(&self, regs: libc::user_regs_struct) -> CrabResult<()> {
         nix::sys::ptrace::setregs(self.pid(), regs).map_err(|err| err.into())
     }
 
@@ -228,7 +221,7 @@ impl LinuxTarget {
         arg4: libc::c_ulonglong,
         arg5: libc::c_ulonglong,
         arg6: libc::c_ulonglong,
-    ) -> Result<libc::c_ulonglong, Box<dyn std::error::Error>> {
+    ) -> CrabResult<libc::c_ulonglong> {
         // Write arguments
         let orig_regs = self.read_regs()?;
         let mut new_regs = orig_regs.clone();
@@ -273,7 +266,7 @@ impl LinuxTarget {
         flags: libc::c_int,
         fd: libc::c_int,
         offset: libc::off_t,
-    ) -> Result<libc::c_ulonglong, Box<dyn std::error::Error>> {
+    ) -> CrabResult<libc::c_ulonglong> {
         self.syscall(
             libc::SYS_mmap as _,
             addr as _,
@@ -285,7 +278,7 @@ impl LinuxTarget {
         )
     }
 
-    pub fn memory_maps(&self) -> Result<Vec<super::MemoryMap>, Box<dyn std::error::Error>> {
+    pub fn memory_maps(&self) -> CrabResult<Vec<super::MemoryMap>> {
         Ok(procfs::process::Process::new(self.pid.as_raw())?
             .maps()?
             .into_iter()
@@ -307,15 +300,13 @@ impl LinuxTarget {
     }
 
     /// Kill debuggee when debugger exits.
-    fn kill_on_exit(&self) -> Result<(), Box<dyn std::error::Error>> {
+    fn kill_on_exit(&self) -> CrabResult<()> {
         nix::sys::ptrace::setoptions(self.pid, nix::sys::ptrace::Options::PTRACE_O_EXITKILL)?;
         Ok(())
     }
 
     /// Returns the current snapshot view of this debuggee process threads.
-    pub fn threads(
-        &self,
-    ) -> Result<Vec<Box<dyn Thread<ThreadId = i32>>>, Box<dyn std::error::Error>> {
+    pub fn threads(&self) -> CrabResult<Vec<Box<dyn Thread<ThreadId = i32>>>> {
         let tasks: Vec<_> = Process::new(self.pid.as_raw())?
             .tasks()?
             .flatten()
@@ -325,10 +316,7 @@ impl LinuxTarget {
         Ok(tasks)
     }
 
-    pub fn set_hardware_breakpoint(
-        &mut self,
-        breakpoint: HardwareBreakpoint,
-    ) -> Result<usize, Box<dyn std::error::Error>> {
+    pub fn set_hardware_breakpoint(&mut self, breakpoint: HardwareBreakpoint) -> CrabResult<usize> {
         #[cfg(target_arch = "x86_64")]
         {
             let index = if let Some(empty) = self.find_empty_watchpoint() {
@@ -384,10 +372,7 @@ impl LinuxTarget {
         Err(Box::new(HardwareBreakpointError::UnsupportedPlatform))
     }
 
-    pub fn clear_hardware_breakpoint(
-        &mut self,
-        index: usize,
-    ) -> Result<HardwareBreakpoint, Box<dyn std::error::Error>> {
+    pub fn clear_hardware_breakpoint(&mut self, index: usize) -> CrabResult<HardwareBreakpoint> {
         #[cfg(target_arch = "x86_64")]
         {
             if self.hardware_breakpoints[index].is_none() {
@@ -430,7 +415,7 @@ impl LinuxTarget {
         Err(Box::new(HardwareBreakpointError::UnsupportedPlatform))
     }
 
-    pub fn clear_all_hardware_breakpoints(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn clear_all_hardware_breakpoints(&mut self) -> CrabResult<()> {
         for index in 0..SUPPORTED_HARDWARE_BREAKPOINTS {
             match self.hardware_breakpoints[index] {
                 Some(_) => {
@@ -442,9 +427,7 @@ impl LinuxTarget {
         Ok(())
     }
 
-    pub fn is_hardware_breakpoint_triggered(
-        &self,
-    ) -> Result<Option<usize>, Box<dyn std::error::Error>> {
+    pub fn is_hardware_breakpoint_triggered(&self) -> CrabResult<Option<usize>> {
         #[cfg(target_arch = "x86_64")]
         {
             let mut dr7 = self.ptrace_peekuser((*DEBUG_REG_OFFSET + 6 * 8) as *mut libc::c_void)?;
@@ -479,7 +462,7 @@ impl LinuxTarget {
     /// This modifies the Target's memory by writting an INT3 instr. at `addr`
     /// The returned Breakpoint object can then be used to disable the breakpoint
     /// or query its state
-    pub fn set_breakpoint(&self, addr: usize) -> Result<Breakpoint, Box<dyn std::error::Error>> {
+    pub fn set_breakpoint(&self, addr: usize) -> CrabResult<Breakpoint> {
         let bp = Breakpoint::new(addr, self.pid())?;
         let existing_breakpoint = {
             let hdl = self.breakpoints.borrow();
@@ -499,7 +482,7 @@ impl LinuxTarget {
     }
 
     /// Restore the instruction shadowed by `bp` & rollback the P.C by 1
-    fn restore_breakpoint(&self, bp: &mut Breakpoint) -> Result<(), Box<dyn std::error::Error>> {
+    fn restore_breakpoint(&self, bp: &mut Breakpoint) -> CrabResult<()> {
         if !bp.is_armed() {
             // Fail silently if restoring an inactive breakpoint
             return Ok(());
@@ -516,19 +499,13 @@ impl LinuxTarget {
     }
 
     /// Disable the breakpoint. Call `set()` on the Breakpoint to enable it again
-    pub fn disable_breakpoint(
-        &self,
-        bp: &mut Breakpoint,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn disable_breakpoint(&self, bp: &mut Breakpoint) -> CrabResult<()> {
         bp.disable().map_err(|e| e.into())
     }
 
     // Temporary function until ptrace_peekuser is fixed in nix crate
     #[cfg(target_arch = "x86_64")]
-    fn ptrace_peekuser(
-        &self,
-        addr: *mut libc::c_void,
-    ) -> Result<libc::c_long, Box<dyn std::error::Error>> {
+    fn ptrace_peekuser(&self, addr: *mut libc::c_void) -> CrabResult<libc::c_long> {
         let ret = unsafe {
             nix::errno::Errno::clear();
             libc::ptrace(
@@ -551,7 +528,7 @@ impl LinuxTarget {
 
 /// Returns the start of a process's virtual memory address range.
 /// This can be useful for calculation of relative addresses in memory.
-pub fn get_addr_range(pid: Pid) -> Result<usize, Box<dyn std::error::Error>> {
+pub fn get_addr_range(pid: Pid) -> CrabResult<usize> {
     let file = File::open(format!("/proc/{}/maps", pid))?;
     let mut buf_read = BufReader::new(file);
     let mut proc_map = String::new();
@@ -717,7 +694,7 @@ mod tests {
     }
 
     #[test]
-    fn reads_threads() -> Result<(), Box<dyn std::error::Error>> {
+    fn reads_threads() -> CrabResult<()> {
         let start_barrier = Arc::new(Barrier::new(2));
         let end_barrier = Arc::new(Barrier::new(2));
 

@@ -17,7 +17,7 @@ static MAC_DSYM_PATH: &str = concat!(
 // FIXME: Running this test just for linux because of privileges issue on macOS. Enable for everything after fixing.
 #[cfg(target_os = "linux")]
 #[test]
-fn disassemble() -> Result<(), Box<dyn std::error::Error>> {
+fn disassemble() -> headcrab::CrabResult<()> {
     test_utils::ensure_testees();
 
     let target = test_utils::launch(BIN_PATH);

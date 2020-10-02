@@ -6,6 +6,8 @@ use winapi::um::processthreadsapi::{
 use winapi::um::winbase;
 use winapi::um::winnt;
 
+use crate::CrabResult;
+
 /// This structure holds the state of the debuggee on windows systems.
 pub struct Target {
     proc_handle: winnt::HANDLE,
@@ -22,7 +24,7 @@ macro_rules! wide_string {
 
 impl Target {
     /// Launch a new debuggee process.
-    pub fn launch(path: &str) -> Result<Target, Box<dyn std::error::Error>> {
+    pub fn launch(path: &str) -> CrabResult<Target> {
         let startup_info = mem::MaybeUninit::<STARTUPINFOW>::zeroed();
         let mut startup_info = unsafe { startup_info.assume_init() };
         let proc_info = mem::MaybeUninit::<PROCESS_INFORMATION>::zeroed();
@@ -52,7 +54,7 @@ impl Target {
     }
 
     /// Attach to a running Process.
-    pub fn attach(pid: u32) -> Result<Target, Box<dyn std::error::Error>> {
+    pub fn attach(pid: u32) -> CrabResult<Target> {
         let access = winnt::PROCESS_VM_OPERATION | winnt::PROCESS_VM_READ | winnt::PROCESS_VM_WRITE;
         let proc_handle = unsafe { OpenProcess(access, FALSE, pid) };
         if proc_handle == std::ptr::null_mut() {

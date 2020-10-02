@@ -6,7 +6,7 @@
 mod test_utils;
 
 #[cfg(target_os = "linux")]
-use headcrab::{symbol::RelocatedDwarf, target::UnixTarget};
+use headcrab::{symbol::RelocatedDwarf, target::UnixTarget, CrabResult};
 
 static BIN_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/testees/hello");
 static LOOPING_BIN_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/testees/loop");
@@ -21,7 +21,7 @@ static MAC_DSYM_PATH: &str = concat!(
 // FIXME: Running this test just for linux because of privileges issue on macOS. Enable for everything after fixing.
 #[cfg(target_os = "linux")]
 #[test]
-fn runtime_breakpoint() -> Result<(), Box<dyn std::error::Error>> {
+fn runtime_breakpoint() -> CrabResult<()> {
     test_utils::ensure_testees();
 
     let target = test_utils::launch(BIN_PATH);
@@ -50,7 +50,7 @@ fn runtime_breakpoint() -> Result<(), Box<dyn std::error::Error>> {
 
 #[cfg(target_os = "linux")]
 #[test]
-fn multiple_breakpoints() -> Result<(), Box<dyn std::error::Error>> {
+fn multiple_breakpoints() -> CrabResult<()> {
     test_utils::ensure_testees();
 
     let target = test_utils::launch(BIN_PATH);
@@ -91,7 +91,7 @@ fn multiple_breakpoints() -> Result<(), Box<dyn std::error::Error>> {
 
 #[cfg(target_os = "linux")]
 #[test]
-fn looping_breakpoint() -> Result<(), Box<dyn std::error::Error>> {
+fn looping_breakpoint() -> CrabResult<()> {
     test_utils::ensure_testees();
 
     let target = test_utils::launch(LOOPING_BIN_PATH);
@@ -122,7 +122,7 @@ fn looping_breakpoint() -> Result<(), Box<dyn std::error::Error>> {
 #[test]
 // Make sure that calling single_step advances the P.C by 1,
 // and gives back control
-fn single_step() -> Result<(), Box<dyn std::error::Error>> {
+fn single_step() -> CrabResult<()> {
     test_utils::ensure_testees();
     let target = test_utils::launch(BIN_PATH);
     let debuginfo = RelocatedDwarf::from_maps(&target.memory_maps()?)?;

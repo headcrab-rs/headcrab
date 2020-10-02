@@ -3,7 +3,7 @@
 mod test_utils;
 
 #[cfg(target_os = "linux")]
-use headcrab::{symbol::RelocatedDwarf, target::UnixTarget};
+use headcrab::{symbol::RelocatedDwarf, target::UnixTarget, CrabResult};
 
 static BIN_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/testees/hello");
 
@@ -17,7 +17,7 @@ static MAC_DSYM_PATH: &str = concat!(
 // FIXME: Running this test just for linux because of privileges issue on macOS. Enable for everything after fixing.
 #[cfg(target_os = "linux")]
 #[test]
-fn unwind_stack() -> Result<(), Box<dyn std::error::Error>> {
+fn unwind_stack() -> CrabResult<()> {
     test_utils::ensure_testees();
 
     let target = test_utils::launch(BIN_PATH);

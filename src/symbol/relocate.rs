@@ -37,11 +37,7 @@ impl std::fmt::Debug for RelocatedDwarfEntry {
 }
 
 impl RelocatedDwarfEntry {
-    fn from_file_and_offset(
-        address: (u64, u64),
-        file: &Path,
-        offset: u64,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
+    fn from_file_and_offset(address: (u64, u64), file: &Path, offset: u64) -> CrabResult<Self> {
         match Dwarf::new(file) {
             Ok(dwarf) => {
                 let (file_range, stated_address) = dwarf
@@ -79,9 +75,7 @@ impl RelocatedDwarfEntry {
 }
 
 impl RelocatedDwarf {
-    pub fn from_maps(
-        maps: &[crate::target::MemoryMap],
-    ) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn from_maps(maps: &[crate::target::MemoryMap]) -> CrabResult<Self> {
         let vec: Result<Vec<_>, _> = maps
             .iter()
             .filter_map(|map| {
@@ -148,7 +142,7 @@ impl RelocatedDwarf {
         None
     }
 
-    pub fn get_var_address(&self, name: &str) -> Result<Option<usize>, Box<dyn std::error::Error>> {
+    pub fn get_var_address(&self, name: &str) -> CrabResult<Option<usize>> {
         for entry in &self.0 {
             if let Some(addr) = entry.dwarf.get_var_address(name)? {
                 if addr as u64 + entry.bias >= entry.address_range.0 + entry.address_range.1 {
@@ -160,10 +154,7 @@ impl RelocatedDwarf {
         Ok(None)
     }
 
-    pub fn source_location(
-        &self,
-        addr: usize,
-    ) -> Result<Option<(String, u64, u64)>, Box<dyn std::error::Error>> {
+    pub fn source_location(&self, addr: usize) -> CrabResult<Option<(String, u64, u64)>> {
         for entry in &self.0 {
             if (addr as u64) < entry.address_range.0
                 || addr as u64 >= entry.address_range.0 + entry.address_range.1
@@ -177,10 +168,7 @@ impl RelocatedDwarf {
         Ok(None)
     }
 
-    pub fn source_snippet(
-        &self,
-        addr: usize,
-    ) -> Result<Option<String>, Box<dyn std::error::Error>> {
+    pub fn source_snippet(&self, addr: usize) -> CrabResult<Option<String>> {
         for entry in &self.0 {
             if (addr as u64) < entry.address_range.0
                 || addr as u64 >= entry.address_range.0 + entry.address_range.1
@@ -194,14 +182,11 @@ impl RelocatedDwarf {
         Ok(None)
     }
 
-    pub fn with_addr_frames<
-        T,
-        F: for<'a> FnOnce(usize, FrameIter<'a>) -> Result<T, Box<dyn std::error::Error>>,
-    >(
+    pub fn with_addr_frames<T, F: for<'a> FnOnce(usize, FrameIter<'a>) -> CrabResult<T>>(
         &self,
         addr: usize,
         f: F,
-    ) -> Result<Option<T>, Box<dyn std::error::Error>> {
+    ) -> CrabResult<Option<T>> {
         for entry in &self.0 {
             if (addr as u64) < entry.address_range.0 || addr as u64 >= entry.address_range.1 {
                 continue;

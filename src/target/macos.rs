@@ -3,6 +3,7 @@ mod vmmap;
 mod writemem;
 
 use crate::target::thread::Thread;
+use crate::CrabResult;
 use libc::pid_t;
 use mach::{
     kern_return, mach_types, mach_types::ipc_space_t, message::mach_msg_type_number_t, port,
@@ -57,7 +58,7 @@ extern "C" {
 impl Thread for OSXThread {
     type ThreadId = mach_port_t;
 
-    fn name(&self) -> Result<Option<String>, Box<dyn Error>> {
+    fn name(&self) -> CrabResult<Option<String>> {
         if let Some(pt_id) = self.pthread_id {
             let mut name = [0 as libc::c_char; MAX_THREAD_NAME];
             let name_ptr = &mut name as *mut [libc::c_char] as *mut libc::c_char;
@@ -91,7 +92,7 @@ pub struct Target {
 impl Target {
     /// Launch a new debuggee process.
     /// Returns an opaque target handle which you can use to control the debuggee.
-    pub fn launch(path: &str) -> Result<Target, Box<dyn std::error::Error>> {
+    pub fn launch(path: &str) -> CrabResult<Target> {
         request_authorization()?;
 
         let path = CString::new(path)?;
@@ -157,7 +158,7 @@ impl Target {
     }
 
     /// Returns a list of maps in the debuggee's virtual adddress space.
-    pub fn get_addr_range(&self) -> Result<usize, Box<dyn std::error::Error>> {
+    pub fn get_addr_range(&self) -> CrabResult<usize> {
         let regs = vmmap::macosx_debug_regions(self.pid, self.port);
         for r in regs {
             println!(
@@ -186,9 +187,7 @@ impl Target {
     }
 
     /// Returns the current snapshot view of this debuggee process threads.
-    pub fn threads(
-        &self,
-    ) -> Result<Vec<Box<dyn Thread<ThreadId = mach_port_t>>>, Box<dyn std::error::Error>> {
+    pub fn threads(&self) -> CrabResult<Vec<Box<dyn Thread<ThreadId = mach_port_t>>>> {
         let mut threads: mach_types::thread_act_array_t = std::ptr::null_mut();
         let mut tcount: mach_msg_type_number_t = 0;
 
@@ -225,7 +224,7 @@ impl Target {
 }
 
 /// Requests task_for_pid privilege for this process.
-fn request_authorization() -> Result<(), Box<dyn std::error::Error>> {
+fn request_authorization() -> CrabResult<()> {
     // TODO: rewrite this ugly ugly code when AuthorizationCopyRights is available is security_framework
 
     let name = CString::new("system.privilege.taskport:")?;
@@ -312,7 +311,7 @@ mod tests {
     }
 
     #[test]
-    fn read_threads() -> Result<(), Box<dyn std::error::Error>> {
+    fn read_threads() -> CrabResult<()> {
         let start_barrier = Arc::new(Barrier::new(2));
         let end_barrier = Arc::new(Barrier::new(2));
 
