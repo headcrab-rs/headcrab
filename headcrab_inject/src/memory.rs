@@ -88,9 +88,9 @@ impl Memory {
         }
     }
 
-    pub fn allocate(&mut self, target: &LinuxTarget, size: u64, align: u8) -> CrabResult<u64> {
-        if self.position % align as u64 != 0 {
-            self.position += align as u64 - self.position % align as u64;
+    pub fn allocate(&mut self, target: &LinuxTarget, size: u64, align: u64) -> CrabResult<u64> {
+        if self.position % align != 0 {
+            self.position += align - self.position % align;
             debug_assert!(self.position % align as u64 == 0);
         }
 
