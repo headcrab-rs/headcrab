@@ -20,7 +20,7 @@ mod example {
     };
     use headcrab::{
         symbol::DisassemblySource, symbol::RelocatedDwarf, target::LinuxTarget, target::UnixTarget,
-        CrabResult,
+        CrabError, CrabResult,
     };
     use imgui::{im_str, ClipboardBackend, Condition, FontSource, ImStr, ImString};
     use imgui_glium_renderer::Renderer;
@@ -135,7 +135,7 @@ mod example {
             if let Some(remote) = &self.remote {
                 Ok(remote)
             } else {
-                Err("No running process".to_string().into())
+                Err(CrabError::HeadCrab("No running process".to_string()))
             }
         }
 

@@ -1,4 +1,5 @@
 use super::*;
+use crate::CrabError;
 
 pub struct RelocatedDwarf(Vec<RelocatedDwarfEntry>);
 
@@ -56,11 +57,11 @@ impl RelocatedDwarfEntry {
                         })
                     })
                     .ok_or_else(|| {
-                        format!(
+                        CrabError::HeadCrab(format!(
                             "Couldn't find segment for `{}`+0x{:x}",
                             file.display(),
                             offset
-                        )
+                        ))
                     })?;
                 Ok(RelocatedDwarfEntry {
                     address_range: address,

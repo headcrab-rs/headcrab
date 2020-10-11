@@ -16,7 +16,7 @@ mod example {
     use headcrab::{
         symbol::{DisassemblySource, RelocatedDwarf, Snippet},
         target::{AttachOptions, LinuxTarget, UnixTarget},
-        CrabResult,
+        CrabError, CrabResult,
     };
 
     #[cfg(target_os = "linux")]
@@ -147,7 +147,7 @@ mod example {
             if let Some(remote) = &self.remote {
                 Ok(remote)
             } else {
-                Err("No running process".to_string().into())
+                Err(CrabError::HeadCrab("No running process".to_string()))
             }
         }
 
@@ -155,7 +155,7 @@ mod example {
             if let Some(remote) = &mut self.remote {
                 Ok(remote)
             } else {
-                Err("No running process".to_string().into())
+                Err(CrabError::HeadCrab("No running process".to_string()))
             }
         }
 
@@ -308,7 +308,8 @@ mod example {
             return Ok(());
         }
 
-        let command = ReplCommand::from_str(command)?;
+        let command =
+            ReplCommand::from_str(command).map_err(|e| CrabError::HeadCrab(e.to_string()))?;
         match command {
             ReplCommand::Help(()) => {
                 ReplCommand::print_help(std::io::stdout(), color).unwrap();
@@ -349,11 +350,18 @@ mod example {
                 return print_source_for_top_of_stack_symbol(context, 3);
             }
             ReplCommand::Registers(sub_cmd) => match &*sub_cmd {
-                "" => Err(format!(
-                    "Expected subcommand found nothing. Try `regs read`"
-                ))?,
+                "" => {
+                    return Err(CrabError::HeadCrab(
+                        "Expected subcommand found nothing. Try `regs read`".into(),
+                    ));
+                }
                 "read" => println!("{:?}", context.remote()?.read_regs()?),
-                _ => Err(format!("Unknown `regs` subcommand `{}`", sub_cmd))?,
+                _ => {
+                    return Err(CrabError::HeadCrab(format!(
+                        "Unknown `regs` subcommand `{}`",
+                        sub_cmd
+                    )));
+                }
             },
             ReplCommand::Backtrace(sub_cmd) => {
                 return show_backtrace(context, &sub_cmd);
@@ -394,26 +402,28 @@ mod example {
         if let Ok(addr) = {
             usize::from_str_radix(&location, 10)
                 .map(|addr| addr as usize)
-                .map_err(|e| Box::new(e))
+                .map_err(CrabError::ParseInt)
                 .or_else(|_e| {
                     if location.starts_with("0x") {
                         let raw_num = location.trim_start_matches("0x");
                         usize::from_str_radix(raw_num, 16)
                             .map(|addr| addr as usize)
-                            .map_err(|_e| Box::new(format!("Invalid address format.")))
+                            .map_err(|_e| CrabError::HeadCrab("Invalid address format.".into()))
                     } else {
                         context
                             .debuginfo()
                             .get_symbol_address(&location)
-                            .ok_or(Box::new(format!("No such symbol {}", location)))
+                            .ok_or_else(|| {
+                                CrabError::HeadCrab(format!("No such symbol {}", location))
+                            })
                     }
                 })
         } {
             context.mut_remote()?.set_breakpoint(addr)?;
         } else {
-            Err(format!(
-                "Breakpoints must be set on a symbol or at a given address. For example `b main` or `b 0x0000555555559394` or even `b 93824992252820`"
-            ))?
+            return Err(CrabError::HeadCrab(
+                "Breakpoints must be set on a symbol or at a given address. For example `b main` or `b 0x0000555555559394` or even `b 93824992252820`".into()
+            ));
         }
         Ok(())
     }
@@ -508,9 +518,10 @@ mod example {
                         println!("                 {} {}", name, location);
                     }
 
-                    let (_dwarf, unit, dw_die_offset) = frame
-                        .function_debuginfo()
-                        .ok_or_else(|| "No dwarf debuginfo for function".to_owned())?;
+                    let (_dwarf, unit, dw_die_offset) =
+                        frame.function_debuginfo().ok_or_else(|| {
+                            CrabError::HeadCrab("No dwarf debuginfo for function".to_owned())
+                        })?;
 
                     let mut eval_ctx = X86_64EvalContext {
                         frame_base: None,

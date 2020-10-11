@@ -3,7 +3,7 @@ mod vmmap;
 mod writemem;
 
 use crate::target::thread::Thread;
-use crate::CrabResult;
+use crate::{CrabError, CrabResult};
 use libc::pid_t;
 use mach::{
     kern_return, mach_types, mach_types::ipc_space_t, message::mach_msg_type_number_t, port,
@@ -115,7 +115,7 @@ impl Target {
             );
             if res != 0 {
                 // TODO: properly wrap error types
-                return Err(Box::new(io::Error::last_os_error()));
+                return Err(io::Error::last_os_error().into());
             }
 
             let res = libc::posix_spawn(
@@ -128,7 +128,7 @@ impl Target {
             );
             if res != 0 {
                 // TODO: properly wrap error types
-                return Err(Box::new(io::Error::last_os_error()));
+                return Err(io::Error::last_os_error().into());
             }
 
             pid
@@ -142,10 +142,10 @@ impl Target {
 
             if res != kern_return::KERN_SUCCESS {
                 // TODO: properly wrap return errors
-                return Err(Box::new(io::Error::new(
+                return Err(io::Error::new(
                             io::ErrorKind::Other,
                             "Could not obtain task port for a process. This might be caused by insufficient permissions.",
-                        )));
+                        ).into());
             }
 
             target_port
@@ -214,11 +214,10 @@ impl Target {
             }
             Ok(osx_threads)
         } else {
-            Err(format!(
+            Err(CrabError::HeadCrab(format!(
                 "Failure to read task {} threads. Error: {}",
                 self.port, result
-            )
-            .into())
+            )))
         }
     }
 }

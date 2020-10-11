@@ -1,7 +1,7 @@
 use gimli::{DebuggingInformationEntry, Dwarf, Unit, UnitOffset, ValueType};
 
 use super::Reader;
-use crate::CrabResult;
+use crate::{CrabError, CrabResult};
 
 macro_rules! dwarf_attr {
     (str($dwarf:ident,$unit:ident) $entry:ident.$name:ident || $missing:ident) => {
@@ -18,12 +18,11 @@ macro_rules! dwarf_attr {
                     dwarf_attr_exists_action_action!($missing, unit_ref)
                 }
                 val => {
-                    return Err(format!(
+                    return Err(crate::error::CrabError::Dwarf(format!(
                         "`{:?}` is not a valid value for a {} attribute",
                         val,
                         gimli::$name,
-                    )
-                    .into())
+                    )))
                 }
             }
         } else {
@@ -35,7 +34,10 @@ macro_rules! dwarf_attr {
             dwarf_attr_exists_action_action!(
                 $missing,
                 attr.udata_value()
-                    .ok_or(concat!("invalid value for", stringify!($name)))?
+                    .ok_or(crate::error::CrabError::Dwarf(format!(
+                        "invalid value for {}",
+                        stringify!($name)
+                    )))?
             )
         } else {
             dwarf_attr_missing_action!($missing, $name)
@@ -48,9 +50,11 @@ macro_rules! dwarf_attr {
                     dwarf_attr_exists_action_action!($missing, encoding)
                 }
                 encoding => {
-                    return Err(
-                        format!("invalid value for {}: {:?}", gimli::$name, encoding).into(),
-                    )
+                    return Err(crate::error::CrabError::Dwarf(format!(
+                        "invalid value for {}: {:?}",
+                        gimli::$name,
+                        encoding
+                    )))
                 }
             }
         } else {
@@ -83,7 +87,10 @@ macro_rules! dwarf_attr_missing_action {
         continue;
     };
     (error, $name:ident) => {
-        return Err(concat!("missing ", stringify!($name), " attribute").into());
+        return Err(crate::error::CrabError::Dwarf(format!(
+            "missing {} attribute",
+            stringify!($name),
+        )));
     };
     (None, $name:ident) => {
         None
@@ -181,7 +188,8 @@ fn value_type_from_base_type(
         Ok(ValueType::Generic)
     } else {
         let base_type_die = unit.entry(base_type)?;
-        Ok(ValueType::from_entry(&base_type_die)?.ok_or_else(|| "not a base type".to_owned())?)
+        Ok(ValueType::from_entry(&base_type_die)?
+            .ok_or_else(|| CrabError::Dwarf("not a base type".to_owned()))?)
     }
 }
 

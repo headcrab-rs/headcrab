@@ -45,7 +45,7 @@ impl Target {
             )
         } == FALSE
         {
-            return Err(Box::new(std::io::Error::last_os_error()));
+            return Err(std::io::Error::last_os_error().into());
         }
 
         Ok(Target {
@@ -58,7 +58,7 @@ impl Target {
         let access = winnt::PROCESS_VM_OPERATION | winnt::PROCESS_VM_READ | winnt::PROCESS_VM_WRITE;
         let proc_handle = unsafe { OpenProcess(access, FALSE, pid) };
         if proc_handle == std::ptr::null_mut() {
-            return Err(Box::new(std::io::Error::last_os_error()));
+            return Err(std::io::Error::last_os_error().into());
         }
         Ok(Target { proc_handle })
     }

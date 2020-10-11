@@ -214,7 +214,7 @@ pub(crate) unsafe fn write_process_vm(pid: Pid, write_ops: &[WriteOp]) -> CrabRe
 
     if bytes_written == -1 {
         // fixme: return a proper error type
-        return Err(Box::new(nix::Error::last()));
+        return Err(nix::Error::last().into());
     }
 
     Ok(())

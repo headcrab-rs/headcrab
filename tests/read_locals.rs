@@ -6,7 +6,7 @@ mod test_utils;
 use headcrab::{
     symbol::{LocalValue, RelocatedDwarf},
     target::UnixTarget,
-    CrabResult,
+    CrabError, CrabResult,
 };
 
 static BIN_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/testees/hello");
@@ -63,9 +63,10 @@ fn read_locals() -> CrabResult<()> {
 
                 first_frame = false;
 
-                let (_dwarf, unit, dw_die_offset) = frame
-                    .function_debuginfo()
-                    .ok_or_else(|| "No dwarf debuginfo for function".to_owned())?;
+                let (_dwarf, unit, dw_die_offset) =
+                    frame.function_debuginfo().ok_or_else(|| {
+                        CrabError::Dwarf("No dwarf debuginfo for function".to_owned())
+                    })?;
 
                 let frame_base = if let Some(frame_base) =
                     unit.entry(dw_die_offset)?.attr(gimli::DW_AT_frame_base)?

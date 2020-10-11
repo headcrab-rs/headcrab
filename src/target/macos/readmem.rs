@@ -68,7 +68,7 @@ impl<'a> ReadMemory<'a> {
                 if res != kern_return::KERN_SUCCESS {
                     // TODO: account for partial reads
                     // TODO: properly wrap error types
-                    return Err(Box::new(io::Error::last_os_error()));
+                    return Err(io::Error::last_os_error().into());
                 }
             }
         }

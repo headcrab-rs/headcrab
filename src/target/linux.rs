@@ -24,7 +24,7 @@ pub use hardware_breakpoint::{
     HardwareBreakpoint, HardwareBreakpointError, HardwareBreakpointSize, HardwareBreakpointType,
 };
 pub use readmem::ReadMemory;
-pub use software_breakpoint::Breakpoint;
+pub use software_breakpoint::{Breakpoint, BreakpointError};
 pub use writemem::WriteMemory;
 
 lazy_static::lazy_static! {
@@ -62,7 +62,7 @@ impl Thread for LinuxThread {
                 // ok to skip. Thread is gone or it's page is not complete yet.
                 Ok(None)
             }
-            Err(err) => Err(Box::new(err)),
+            Err(err) => Err(err.into()),
         }
     }
 
@@ -322,7 +322,7 @@ impl LinuxTarget {
             let index = if let Some(empty) = self.find_empty_watchpoint() {
                 empty
             } else {
-                return Err(Box::new(HardwareBreakpointError::NoEmptyWatchpoint));
+                return Err(HardwareBreakpointError::NoEmptyWatchpoint.into());
             };
 
             let rw_bits: u64 = breakpoint.rw_bits(index);
@@ -376,7 +376,7 @@ impl LinuxTarget {
         #[cfg(target_arch = "x86_64")]
         {
             if self.hardware_breakpoints[index].is_none() {
-                return Err(Box::new(HardwareBreakpointError::DoesNotExist(index)));
+                return Err(HardwareBreakpointError::DoesNotExist(index).into());
             }
 
             let mut dr7 =
@@ -517,7 +517,7 @@ impl LinuxTarget {
         };
         match nix::errno::Errno::result(ret) {
             Ok(..) | Err(nix::Error::Sys(nix::errno::Errno::UnknownErrno)) => Ok(ret),
-            Err(err) => Err(Box::new(err)),
+            Err(err) => Err(err.into()),
         }
     }
 
