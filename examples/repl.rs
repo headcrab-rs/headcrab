@@ -352,7 +352,7 @@ mod example {
                 "" => Err(format!(
                     "Expected subcommand found nothing. Try `regs read`"
                 ))?,
-                "read" => println!("{:?}", context.remote()?.read_regs()?),
+                "read" => println!("{:#016x?}", context.remote()?.read_regs()?),
                 _ => Err(format!("Unknown `regs` subcommand `{}`", sub_cmd))?,
             },
             ReplCommand::Backtrace(sub_cmd) => {
