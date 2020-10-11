@@ -39,7 +39,7 @@ impl HardwareBreakpointSize {
             2 => Ok(Self::_2),
             4 => Ok(Self::_4),
             8 => Ok(Self::_8),
-            x => Err(Box::new(HardwareBreakpointError::UnsupportedWatchSize(x))),
+            x => Err(HardwareBreakpointError::UnsupportedWatchSize(x).into()),
         }
     }
 }

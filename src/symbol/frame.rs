@@ -3,6 +3,7 @@ use std::fmt;
 
 use super::dwarf_utils::SearchAction;
 use super::*;
+use crate::{CrabError, CrabResult};
 
 pub struct Frame<'a> {
     dwarf: &'a gimli::Dwarf<Reader<'a>>,
@@ -68,7 +69,7 @@ impl<'a> Frame<'a> {
     ) -> CrabResult<()> {
         let (dwarf, unit, dw_die_offset) = self
             .function_debuginfo()
-            .ok_or_else(|| "No dwarf debuginfo for function".to_owned())?;
+            .ok_or_else(|| CrabError::Dwarf("No dwarf debuginfo for function".to_owned()))?;
 
         dwarf_utils::search_tree(unit, Some(dw_die_offset), |entry, _indent| {
             if entry.offset() == dw_die_offset {
@@ -95,7 +96,7 @@ impl<'a> Frame<'a> {
     ) -> CrabResult<()> {
         let (dwarf, unit, dw_die_offset) = self
             .function_debuginfo()
-            .ok_or_else(|| "No dwarf debuginfo for function".to_owned())?;
+            .ok_or_else(|| CrabError::Dwarf("No dwarf debuginfo for function".to_owned()))?;
         dwarf_utils::search_tree(unit, Some(dw_die_offset), |entry, _indent| {
             if entry.tag() == gimli::DW_TAG_inlined_subroutine && entry.offset() != dw_die_offset {
                 return Ok(SearchAction::SkipChildren); // Already visited by addr2line frame iter
@@ -162,21 +163,27 @@ impl<'ctx> LocalValue<'ctx> {
                 match encoding {
                     gimli::DW_ATE_unsigned | gimli::DW_ATE_signed => {
                         let size = u8::try_from(size).map_err(|_| {
-                            format!("`{}` is too big for DW_ATE_unsigned or DW_ATE_signed", size,)
+                            CrabError::Dwarf(format!(
+                                "`{}` is too big for DW_ATE_unsigned or DW_ATE_signed",
+                                size
+                            ))
                         })?;
                         let data = match self {
                             LocalValue::Pieces(pieces) => {
                                 if pieces.len() != 1 {
-                                    return Err("too many pieces for an integer value".into());
+                                    return Err(CrabError::Dwarf(
+                                        "too many pieces for an integer value".into(),
+                                    ));
                                 }
 
                                 if pieces[0].size_in_bits.is_none()
                                     || pieces[0].size_in_bits.unwrap() == u64::from(size) * 8
                                 {
                                 } else {
-                                    return Err(
-                                        format!("wrong size for piece {:?}", pieces[0]).into()
-                                    );
+                                    return Err(CrabError::Dwarf(format!(
+                                        "wrong size for piece {:?}",
+                                        pieces[0]
+                                    )));
                                 }
                                 // FIXME handle this
                                 assert!(
@@ -187,7 +194,9 @@ impl<'ctx> LocalValue<'ctx> {
 
                                 let value = match &pieces[0].location {
                                     gimli::Location::Empty => {
-                                        return Err("found empty piece for an integer value".into())
+                                        return Err(CrabError::Dwarf(
+                                            "found empty piece for an integer value".into(),
+                                        ))
                                     }
                                     gimli::Location::Register { register } => {
                                         eval_ctx.register(
@@ -207,9 +216,9 @@ impl<'ctx> LocalValue<'ctx> {
                                         value: _,
                                         byte_offset: _,
                                     } => {
-                                        return Err(
-                                            "found implicit pointer for an integer value".into()
-                                        )
+                                        return Err(CrabError::Dwarf(
+                                            "found implicit pointer for an integer value".into(),
+                                        ))
                                     }
                                 };
                                 match value {
@@ -223,7 +232,9 @@ impl<'ctx> LocalValue<'ctx> {
                                     gimli::Value::I64(data) => data as u64,
                                     gimli::Value::U64(data) => data,
                                     gimli::Value::F32(_) | gimli::Value::F64(_) => {
-                                        return Err("found float piece for an integer value".into())
+                                        return Err(CrabError::Dwarf(
+                                            "found float piece for an integer value".into(),
+                                        ))
                                     }
                                 }
                             }

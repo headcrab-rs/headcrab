@@ -3,7 +3,7 @@ use capstone::Capstone;
 use std::fs::File;
 use std::io::{prelude::*, BufReader};
 
-use crate::CrabResult;
+use crate::{CrabError, CrabResult};
 
 pub struct DisassemblySource(Capstone);
 
@@ -60,11 +60,11 @@ impl super::Dwarf {
             assert!(addr2line.find_dwarf_unit(addr as u64).is_some());
             let location = addr2line
                 .find_location(addr as u64)?
-                .ok_or_else(|| "source location not found".to_string())?;
+                .ok_or_else(|| CrabError::Dwarf("source location not found".to_string()))?;
             Ok((
                 location
                     .file
-                    .ok_or_else(|| "Unknown file".to_string())?
+                    .ok_or_else(|| CrabError::Dwarf("Unknown file".to_string()))?
                     .to_string(),
                 location.line.unwrap_or(0) as u64,
                 location.column.unwrap_or(0) as u64,
@@ -78,7 +78,7 @@ impl super::Dwarf {
         Ok(file
             .lines()
             .nth(line as usize)
-            .ok_or_else(|| "Line not found".to_string())?
+            .ok_or_else(|| CrabError::Dwarf("Line not found".to_string()))?
             .to_string())
     }
 }
@@ -119,7 +119,9 @@ impl Snippet {
         column: usize,
     ) -> CrabResult<Self> {
         if line_no == 0 {
-            return Err("Line numbers should start at 1.".into());
+            return Err(CrabError::HeadCrab(
+                "Line numbers should start at 1.".into(),
+            ));
         }
         let file = File::open(file_path)?;
         let reader = BufReader::new(file);
