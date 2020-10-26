@@ -7,23 +7,11 @@ use crate::CrabResult;
 use libc::pid_t;
 use mach::{
     kern_return, mach_types, mach_types::ipc_space_t, message::mach_msg_type_number_t, port,
-    port::mach_port_name_t, port::mach_port_t, traps, traps::current_task, vm, vm_types::*,
+    port::mach_port_name_t, port::mach_port_t, traps, traps::current_task,
 };
-use nix::{
-    sys::signal::{self, Signal},
-    unistd,
-    unistd::Pid,
-};
+use nix::{unistd, unistd::Pid};
 use security_framework_sys::authorization::*;
-use std::{
-    error::Error,
-    ffi::CStr,
-    ffi::CString,
-    io,
-    marker::PhantomData,
-    mem::{self, MaybeUninit},
-    ptr,
-};
+use std::{ffi::CStr, ffi::CString, io, mem::MaybeUninit, ptr};
 
 pub use readmem::ReadMemory;
 pub use writemem::WriteMemory;
