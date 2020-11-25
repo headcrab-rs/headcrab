@@ -2,7 +2,7 @@ mod readmem;
 mod vmmap;
 mod writemem;
 
-use crate::target::thread::Thread;
+use crate::target::{registers::Registers, thread::Thread};
 use crate::CrabResult;
 use libc::pid_t;
 use mach::{
@@ -43,8 +43,58 @@ extern "C" {
     pub fn pthread_from_mach_thread_np(port: libc::c_uint) -> libc::pthread_t;
 }
 
-impl Thread for OSXThread {
+// TODO: implement `Registers` properly for macOS x86_64
+impl Registers for () {
+    fn ip(&self) -> u64 {
+        todo!()
+    }
+    fn set_ip(&mut self, ip: u64) {
+        todo!()
+    }
+    fn sp(&self) -> u64 {
+        todo!()
+    }
+    fn set_sp(&mut self, sp: u64) {
+        todo!()
+    }
+    fn bp(&self) -> Option<u64> {
+        todo!()
+    }
+    #[must_use]
+    fn set_bp(&mut self, bp: u64) -> Option<()> {
+        todo!()
+    }
+    fn reg_for_dwarf(&self, reg: gimli::Register) -> Option<u64> {
+        todo!()
+    }
+    #[must_use]
+    fn set_reg_for_dwarf(&mut self, reg: gimli::Register, val: u64) -> Option<()> {
+        todo!()
+    }
+    fn name_for_dwarf(reg: gimli::Register) -> Option<&'static str>
+    where
+        Self: Sized,
+    {
+        todo!()
+    }
+    fn dwarf_for_name(name: &str) -> Option<gimli::Register>
+    where
+        Self: Sized,
+    {
+        todo!()
+    }
+}
+
+impl Thread<()> for OSXThread {
     type ThreadId = mach_port_t;
+
+    fn read_regs(&self) -> CrabResult<()> {
+        todo!()
+    }
+
+    fn write_regs(&self, regs: ()) -> CrabResult<()> {
+        todo!()
+    }
 
     fn name(&self) -> CrabResult<Option<String>> {
         if let Some(pt_id) = self.pthread_id {
@@ -175,7 +225,7 @@ impl Target {
     }
 
     /// Returns the current snapshot view of this debuggee process threads.
-    pub fn threads(&self) -> CrabResult<Vec<Box<dyn Thread<ThreadId = mach_port_t>>>> {
+    pub fn threads(&self) -> CrabResult<Vec<Box<dyn Thread<(), ThreadId = mach_port_t>>>> {
         let mut threads: mach_types::thread_act_array_t = std::ptr::null_mut();
         let mut tcount: mach_msg_type_number_t = 0;
 
@@ -196,7 +246,7 @@ impl Target {
                     port,
                     pthread_id,
                     task_port,
-                }) as Box<dyn Thread<ThreadId = mach_port_t>>;
+                }) as Box<dyn Thread<(), ThreadId = mach_port_t>>;
 
                 osx_threads.push(thread);
             }
