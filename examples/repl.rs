@@ -512,7 +512,7 @@ mod example {
                         .function_debuginfo()
                         .ok_or_else(|| "No dwarf debuginfo for function".to_owned())?;
 
-                    let mut eval_ctx = X86_64EvalContext {
+                    let mut eval_ctx = EvalContext {
                         frame_base: None,
                         regs: Box::new(regs),
                     };
@@ -658,12 +658,12 @@ mod example {
         Ok(())
     }
 
-    struct X86_64EvalContext {
+    struct EvalContext {
         frame_base: Option<u64>,
         regs: Box<dyn headcrab::target::Registers>,
     }
 
-    impl headcrab::symbol::dwarf_utils::EvalContext for X86_64EvalContext {
+    impl headcrab::symbol::dwarf_utils::EvalContext for EvalContext {
         fn frame_base(&self) -> u64 {
             self.frame_base.unwrap()
         }
@@ -690,7 +690,7 @@ mod example {
 
     fn show_local<'ctx>(
         kind: &str,
-        eval_ctx: &X86_64EvalContext,
+        eval_ctx: &EvalContext,
         local: headcrab::symbol::Local<'_, 'ctx>,
     ) -> CrabResult<()> {
         let value = match local.value() {

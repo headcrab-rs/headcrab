@@ -92,6 +92,7 @@ where
 }
 
 /// Type alias to use for boxed threads.
+#[cfg(target_arch = "x86_64")]
 type BoxedLinuxThread = Box<dyn Thread<RegistersX86_64, ThreadId = i32>>;
 
 /// This structure holds the state of a debuggee on Linux based systems
