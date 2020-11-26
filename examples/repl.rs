@@ -15,7 +15,7 @@ mod example {
 
     use headcrab::{
         symbol::{DisassemblySource, RelocatedDwarf, Snippet},
-        target::{AttachOptions, LinuxTarget, UnixTarget},
+        target::{AttachOptions, LinuxTarget, Registers, UnixTarget},
         CrabResult,
     };
 
@@ -359,7 +359,7 @@ mod example {
                 return show_backtrace(context, &sub_cmd);
             }
             ReplCommand::Disassemble(()) => {
-                let ip = context.remote()?.read_regs()?.rip;
+                let ip = context.remote()?.read_regs()?.ip();
                 let mut code = [0; 64];
                 unsafe {
                     context
@@ -475,8 +475,8 @@ mod example {
     }
 
     fn show_locals(context: &mut Context) -> CrabResult<()> {
-        let regs = context.remote()?.read_regs()?;
-        let func = regs.rip as usize;
+        let regs = context.remote()?.main_thread()?.read_regs()?;
+        let func = regs.ip() as usize;
         let res = context.debuginfo().with_addr_frames(
             func,
             |func, mut frames: headcrab::symbol::FrameIter| {
@@ -512,9 +512,9 @@ mod example {
                         .function_debuginfo()
                         .ok_or_else(|| "No dwarf debuginfo for function".to_owned())?;
 
-                    let mut eval_ctx = X86_64EvalContext {
+                    let mut eval_ctx = EvalContext {
                         frame_base: None,
-                        regs,
+                        regs: Box::new(regs),
                     };
 
                     // FIXME handle DW_TAG_inlined_subroutine with DW_AT_frame_base in parent DW_TAG_subprogram
@@ -531,7 +531,7 @@ mod example {
                         match res[0].location {
                             gimli::Location::Register {
                                 register: gimli::X86_64::RBP,
-                            } => eval_ctx.frame_base = Some(regs.rbp),
+                            } => eval_ctx.frame_base = regs.bp(),
                             ref loc => unimplemented!("{:?}", loc), // FIXME
                         }
                     }
@@ -564,14 +564,14 @@ mod example {
     fn get_call_stack(context: &mut Context, bt_type: &BacktraceType) -> CrabResult<Vec<usize>> {
         context.load_debuginfo_if_necessary()?;
 
-        let regs = context.remote()?.read_regs()?;
+        let regs = context.remote()?.main_thread()?.read_regs()?;
 
         let mut stack: [usize; 1024] = [0; 1024];
         unsafe {
             context
                 .remote()?
                 .read()
-                .read(&mut stack, regs.rsp as usize)
+                .read(&mut stack, regs.sp() as usize)
                 .apply()?;
         }
 
@@ -579,15 +579,15 @@ mod example {
             BacktraceType::FramePtr => headcrab::symbol::unwind::frame_pointer_unwinder(
                 context.debuginfo(),
                 &stack[..],
-                regs.rip as usize,
-                regs.rsp as usize,
-                regs.rbp as usize,
+                regs.ip() as usize,
+                regs.sp() as usize,
+                regs.bp().unwrap() as usize, // TODO: fix `unwrap` for non-x86 platforms
             )
             .collect(),
             BacktraceType::Naive => headcrab::symbol::unwind::naive_unwinder(
                 context.debuginfo(),
                 &stack[..],
-                regs.rip as usize,
+                regs.ip() as usize,
             )
             .collect(),
         };
@@ -658,48 +658,23 @@ mod example {
         Ok(())
     }
 
-    fn get_linux_x86_64_reg(
-        regs: libc::user_regs_struct,
-    ) -> impl Fn(gimli::Register, gimli::ValueType) -> gimli::Value {
-        move |reg, ty| {
-            let val = match reg {
-                gimli::X86_64::RAX => regs.rax,
-                gimli::X86_64::RBX => regs.rbx,
-                gimli::X86_64::RCX => regs.rcx,
-                gimli::X86_64::RDX => regs.rdx,
-                gimli::X86_64::RSI => regs.rsi,
-                gimli::X86_64::RDI => regs.rdi,
-                gimli::X86_64::RSP => regs.rsp,
-                gimli::X86_64::RBP => regs.rbp,
-                gimli::X86_64::R9 => regs.r9,
-                gimli::X86_64::R10 => regs.r10,
-                gimli::X86_64::R11 => regs.r11,
-                gimli::X86_64::R12 => regs.r12,
-                gimli::X86_64::R13 => regs.r13,
-                gimli::X86_64::R14 => regs.r14,
-                gimli::X86_64::R15 => regs.r15,
-                reg => unimplemented!("{:?}", reg), // FIXME
-            };
-            match ty {
-                gimli::ValueType::Generic => gimli::Value::Generic(val),
-                gimli::ValueType::U64 => gimli::Value::U64(val),
-                _ => unimplemented!(),
-            }
-        }
-    }
-
-    struct X86_64EvalContext {
+    struct EvalContext {
         frame_base: Option<u64>,
-        regs: libc::user_regs_struct,
+        regs: Box<dyn headcrab::target::Registers>,
     }
 
-    impl headcrab::symbol::dwarf_utils::EvalContext for X86_64EvalContext {
+    impl headcrab::symbol::dwarf_utils::EvalContext for EvalContext {
         fn frame_base(&self) -> u64 {
             self.frame_base.unwrap()
         }
 
         fn register(&self, register: gimli::Register, base_type: gimli::ValueType) -> gimli::Value {
-            get_linux_x86_64_reg(self.regs)(register, base_type)
+            let val = self.regs.reg_for_dwarf(register).unwrap();
+            match base_type {
+                gimli::ValueType::Generic => gimli::Value::Generic(val),
+                gimli::ValueType::U64 => gimli::Value::U64(val),
+                _ => unimplemented!(),
+            }
         }
 
         fn memory(
@@ -715,7 +690,7 @@ mod example {
 
     fn show_local<'ctx>(
         kind: &str,
-        eval_ctx: &X86_64EvalContext,
+        eval_ctx: &EvalContext,
         local: headcrab::symbol::Local<'_, 'ctx>,
     ) -> CrabResult<()> {
         let value = match local.value() {
@@ -778,20 +753,20 @@ mod example {
             run_function, stack
         );
 
-        let orig_regs = inj_ctx.target().read_regs()?;
-        let regs = libc::user_regs_struct {
-            rip: run_function,
-            rsp: stack,
-            ..orig_regs
-        };
-        inj_ctx.target().write_regs(regs)?;
+        // TODO: replace `main_thread` with the current thread when we'll have it.
+        let orig_regs = inj_ctx.target().main_thread()?.read_regs()?;
+        let mut regs = orig_regs.clone();
+        regs.set_ip(run_function);
+        regs.set_sp(stack);
+        inj_ctx.target().main_thread()?.write_regs(regs)?;
+
         let status = inj_ctx.target().unpause()?;
         println!(
             "{:?} at 0x{:016x}",
             status,
-            inj_ctx.target().read_regs()?.rip
+            inj_ctx.target().read_regs()?.ip()
         );
-        inj_ctx.target().write_regs(orig_regs)?;
+        inj_ctx.target().main_thread()?.write_regs(orig_regs)?;
 
         Ok(())
     }
@@ -841,21 +816,21 @@ mod example {
             run_function, stack
         );
 
-        let orig_regs = inj_ctx.target().read_regs()?;
-        println!("orig rip: {:016x}", orig_regs.rip);
-        let regs = libc::user_regs_struct {
-            rip: run_function,
-            rsp: stack,
-            ..orig_regs
-        };
-        inj_ctx.target().write_regs(regs)?;
+        let orig_regs = inj_ctx.target().main_thread()?.read_regs()?;
+        println!("orig rip: {:016x}", orig_regs.ip());
+
+        let mut regs = orig_regs.clone();
+        regs.set_ip(run_function);
+        regs.set_sp(stack);
+        inj_ctx.target().main_thread()?.write_regs(regs)?;
+
         let status = inj_ctx.target().unpause()?;
         println!(
             "{:?} at 0x{:016x}",
             status,
-            inj_ctx.target().read_regs()?.rip
+            inj_ctx.target().main_thread()?.read_regs()?.ip()
         );
-        inj_ctx.target().write_regs(orig_regs)?;
+        inj_ctx.target().main_thread()?.write_regs(orig_regs)?;
 
         Ok(())
     }

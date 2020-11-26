@@ -5,7 +5,7 @@ mod test_utils;
 #[cfg(target_os = "linux")]
 use headcrab::{
     symbol::{LocalValue, RelocatedDwarf},
-    target::UnixTarget,
+    target::{Registers, UnixTarget},
     CrabResult,
 };
 
@@ -31,22 +31,22 @@ fn read_locals() -> CrabResult<()> {
     // Breakpoint
     test_utils::patch_breakpoint(&target, &debuginfo);
     target.unpause()?;
-    let ip = target.read_regs()?.rip;
+    let ip = target.read_regs()?.ip();
     assert_eq!(
         debuginfo.get_address_symbol_name(ip as usize).as_deref(),
         Some("breakpoint")
     );
 
     while debuginfo
-        .get_address_symbol_name(target.read_regs()?.rip as usize)
+        .get_address_symbol_name(target.read_regs()?.ip() as usize)
         .as_deref()
         == Some("breakpoint")
     {
         target.step()?;
     }
 
-    let regs = target.read_regs()?;
-    let ip = regs.rip;
+    let regs = target.main_thread()?.read_regs()?;
+    let ip = regs.ip();
     assert!(debuginfo
         .get_address_symbol_name(ip as usize)
         .as_deref()
@@ -76,7 +76,7 @@ fn read_locals() -> CrabResult<()> {
                         frame_base,
                         &X86_64EvalContext {
                             frame_base: None,
-                            regs,
+                            regs: Box::new(regs),
                         },
                     )?;
                     assert_eq!(res.len(), 1);
@@ -85,14 +85,17 @@ fn read_locals() -> CrabResult<()> {
                     Some(match res[0].location {
                         gimli::Location::Register {
                             register: gimli::X86_64::RBP,
-                        } => regs.rbp,
+                        } => regs.bp().unwrap(),
                         ref loc => unimplemented!("{:?}", loc), // FIXME
                     })
                 } else {
                     None
                 };
 
-                let eval_ctx = X86_64EvalContext { frame_base, regs };
+                let eval_ctx = X86_64EvalContext {
+                    frame_base,
+                    regs: Box::new(regs),
+                };
 
                 frame.each_argument(&eval_ctx, ip as u64, |local| {
                     panic!("Main should not have any arguments, but it has {:?}", local);
@@ -142,7 +145,7 @@ fn read_locals() -> CrabResult<()> {
 #[cfg(target_os = "linux")]
 struct X86_64EvalContext {
     frame_base: Option<u64>,
-    regs: libc::user_regs_struct,
+    regs: Box<dyn Registers>,
 }
 
 #[cfg(target_os = "linux")]
@@ -152,7 +155,12 @@ impl headcrab::symbol::dwarf_utils::EvalContext for X86_64EvalContext {
     }
 
     fn register(&self, register: gimli::Register, base_type: gimli::ValueType) -> gimli::Value {
-        get_linux_x86_64_reg(self.regs)(register, base_type)
+        let val = self.regs.reg_for_dwarf(register).unwrap();
+        match base_type {
+            gimli::ValueType::Generic => gimli::Value::Generic(val),
+            gimli::ValueType::U64 => gimli::Value::U64(val),
+            _ => unimplemented!(),
+        }
     }
 
     fn memory(
@@ -163,25 +171,5 @@ impl headcrab::symbol::dwarf_utils::EvalContext for X86_64EvalContext {
         _base_type: gimli::ValueType,
     ) -> gimli::Value {
         todo!()
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn get_linux_x86_64_reg(
-    regs: libc::user_regs_struct,
-) -> impl Fn(gimli::Register, gimli::ValueType) -> gimli::Value {
-    move |reg, ty| {
-        let val = match reg {
-            gimli::X86_64::RAX => regs.rax,
-            gimli::X86_64::RBX => regs.rbx,
-            gimli::X86_64::RDI => regs.rdi,
-            gimli::X86_64::RBP => regs.rbp,
-            reg => unimplemented!("{:?}", reg), // FIXME
-        };
-        match ty {
-            gimli::ValueType::Generic => gimli::Value::Generic(val),
-            gimli::ValueType::U64 => gimli::Value::U64(val),
-            _ => unimplemented!(),
-        }
     }
 }

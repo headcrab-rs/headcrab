@@ -19,8 +19,8 @@ mod example {
         glutin::window::WindowBuilder, Display, Surface,
     };
     use headcrab::{
-        symbol::DisassemblySource, symbol::RelocatedDwarf, target::LinuxTarget, target::UnixTarget,
-        CrabResult,
+        symbol::DisassemblySource, symbol::RelocatedDwarf, target::LinuxTarget, target::Registers,
+        target::UnixTarget, CrabResult,
     };
     use imgui::{im_str, ClipboardBackend, Condition, FontSource, ImStr, ImString};
     use imgui_glium_renderer::Renderer;
@@ -210,7 +210,7 @@ mod example {
                 .size([395.0, 390.0], Condition::FirstUseEver)
                 .build(ui, || {
                     if let Err(err) = (|| -> CrabResult<()> {
-                        let ip = remote.read_regs()?.rip;
+                        let ip = remote.read_regs()?.ip();
                         let mut code = [0; 64];
                         unsafe {
                             remote.read().read(&mut code, ip as usize).apply()?;
@@ -241,7 +241,12 @@ mod example {
 
                         context.load_debuginfo_if_necessary()?;
 
-                        let regs = context.remote.as_ref().unwrap().read_regs()?;
+                        let regs = context
+                            .remote
+                            .as_ref()
+                            .unwrap()
+                            .main_thread()?
+                            .read_regs()?;
 
                         let mut stack: [usize; 1024] = [0; 1024];
                         unsafe {
@@ -250,7 +255,7 @@ mod example {
                                 .as_ref()
                                 .unwrap()
                                 .read()
-                                .read(&mut stack, regs.rsp as usize)
+                                .read(&mut stack, regs.sp() as usize)
                                 .apply()?;
                         }
 
@@ -259,16 +264,16 @@ mod example {
                                 headcrab::symbol::unwind::frame_pointer_unwinder(
                                     context.debuginfo(),
                                     &stack[..],
-                                    regs.rip as usize,
-                                    regs.rsp as usize,
-                                    regs.rbp as usize,
+                                    regs.ip() as usize,
+                                    regs.sp() as usize,
+                                    regs.bp().unwrap() as usize, // TODO: `unwrap` is unsafe for non-x86 platforms
                                 )
                                 .collect()
                             }
                             BacktraceType::Naive => headcrab::symbol::unwind::naive_unwinder(
                                 context.debuginfo(),
                                 &stack[..],
-                                regs.rip as usize,
+                                regs.ip() as usize,
                             )
                             .collect(),
                         };

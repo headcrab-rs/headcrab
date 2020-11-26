@@ -28,7 +28,7 @@ fn fixed_breakpoint() -> CrabResult<()> {
 
     // First breakpoint
     target.unpause()?;
-    let ip = target.read_regs()?.rip;
+    let ip = target.read_regs()?.ip();
     assert_eq!(
         debuginfo.get_address_symbol_name(ip as usize).as_deref(),
         Some("main")
@@ -36,7 +36,7 @@ fn fixed_breakpoint() -> CrabResult<()> {
 
     // Second breakpoint
     target.unpause()?;
-    let ip = target.read_regs()?.rip;
+    let ip = target.read_regs()?.ip();
     assert_eq!(
         debuginfo.get_address_symbol_name(ip as usize).as_deref(),
         Some("main")

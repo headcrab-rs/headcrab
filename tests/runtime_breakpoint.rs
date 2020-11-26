@@ -6,7 +6,11 @@
 mod test_utils;
 
 #[cfg(target_os = "linux")]
-use headcrab::{symbol::RelocatedDwarf, target::UnixTarget, CrabResult};
+use headcrab::{
+    symbol::RelocatedDwarf,
+    target::{Registers, UnixTarget},
+    CrabResult,
+};
 
 static BIN_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/testees/hello");
 static LOOPING_BIN_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/testees/loop");
@@ -38,7 +42,7 @@ fn runtime_breakpoint() -> CrabResult<()> {
     // run the program
     target.unpause()?;
     // have we hit the breakpoint ?
-    let ip = target.read_regs()?.rip;
+    let ip = target.read_regs()?.ip();
     assert_eq!(ip as usize, main_addr);
     let status = target.step()?;
     assert_eq!(status, test_utils::ws_sigtrap(&target));
@@ -67,18 +71,19 @@ fn multiple_breakpoints() -> CrabResult<()> {
     // make sure we hit the breakpoint
     let status = target.unpause()?;
     assert_eq!(status, test_utils::ws_sigtrap(&target));
-    let mut regs = target.read_regs()?;
-    assert_eq!(regs.rip as usize, main_addr);
+
+    let mut regs = target.main_thread()?.read_regs()?;
+    assert_eq!(regs.ip() as usize, main_addr);
 
     //  Let's go a few instructions back and see if disabling the breakpoint works
-    regs.rip -= 3;
+    regs.set_ip(regs.ip() - 3);
 
-    target.write_regs(regs)?;
+    target.main_thread()?.write_regs(regs)?;
     breakpoint2.disable()?;
     assert!(!breakpoint.is_armed());
 
-    regs.rip += 3;
-    target.write_regs(regs)?;
+    regs.set_ip(regs.ip() + 3);
+    target.main_thread()?.write_regs(regs)?;
 
     // Same, let's check that creating a new breakpoint and unsetting it right away
     // disarms the trap
@@ -111,7 +116,7 @@ fn looping_breakpoint() -> CrabResult<()> {
         assert_eq!(status, test_utils::ws_sigtrap(&target));
 
         let regs = target.read_regs()?;
-        assert_eq!(regs.rip as usize, bp_addr);
+        assert_eq!(regs.ip() as usize, bp_addr);
         assert!(!breakpoint.is_armed());
     }
     test_utils::continue_to_end(&target);

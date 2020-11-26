@@ -18,7 +18,11 @@ mod windows;
 #[cfg(target_os = "windows")]
 pub use windows::*;
 
+mod registers;
 mod thread;
+
+pub use registers::Registers;
+pub use thread::Thread;
 
 #[derive(Debug)]
 pub struct MemoryMap {

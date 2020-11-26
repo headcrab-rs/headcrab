@@ -67,7 +67,7 @@ fn read_memory() -> CrabResult<()> {
     // Wait for the breakpoint to get hit.
     target.unpause().unwrap();
 
-    let ip = target.read_regs().unwrap().rip;
+    let ip = target.read_regs().unwrap().ip();
     assert_eq!(
         debuginfo.get_address_symbol_name(ip as usize).as_deref(),
         Some("breakpoint")

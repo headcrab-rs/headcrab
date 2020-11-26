@@ -4,8 +4,11 @@ mod readmem;
 mod software_breakpoint;
 mod writemem;
 
-use crate::target::thread::Thread;
-use crate::target::unix::{self, UnixTarget};
+use crate::target::{
+    registers::Registers,
+    thread::Thread,
+    unix::{self, UnixTarget},
+};
 use crate::CrabResult;
 use nix::sys::ptrace;
 use nix::sys::wait::{waitpid, WaitStatus};
@@ -42,6 +45,9 @@ const SUPPORTED_HARDWARE_BREAKPOINTS: usize = 4;
 #[cfg(not(target_arch = "x86_64"))]
 const SUPPORTED_HARDWARE_BREAKPOINTS: usize = 0;
 
+#[cfg(target_arch = "x86_64")]
+use crate::target::registers::RegistersX86_64;
+
 struct LinuxThread {
     task: Task,
 }
@@ -52,8 +58,22 @@ impl LinuxThread {
     }
 }
 
-impl Thread for LinuxThread {
+impl<Regs> Thread<Regs> for LinuxThread
+where
+    Regs: Registers + From<libc::user_regs_struct> + Into<libc::user_regs_struct>,
+{
     type ThreadId = i32;
+
+    fn read_regs(&self) -> CrabResult<Regs> {
+        let regs = nix::sys::ptrace::getregs(Pid::from_raw(self.task.tid))?;
+        Ok(Regs::from(regs))
+    }
+
+    fn write_regs(&self, regs: Regs) -> CrabResult<()> {
+        let regs = regs.into();
+        nix::sys::ptrace::setregs(Pid::from_raw(self.task.tid), regs)?;
+        Ok(())
+    }
 
     fn name(&self) -> CrabResult<Option<String>> {
         match self.task.stat() {
@@ -70,6 +90,10 @@ impl Thread for LinuxThread {
         self.task.tid
     }
 }
+
+/// Type alias to use for boxed threads.
+#[cfg(target_arch = "x86_64")]
+type BoxedLinuxThread = Box<dyn Thread<RegistersX86_64, ThreadId = i32>>;
 
 /// This structure holds the state of a debuggee on Linux based systems
 /// You can use it to read & write debuggee's memory, pause it, set breakpoints, etc.
@@ -102,10 +126,12 @@ impl UnixTarget for LinuxTarget {
 
         // We may have hit a user defined breakpoint
         if let WaitStatus::Stopped(_, nix::sys::signal::Signal::SIGTRAP) = status {
+            let regs = self.main_thread()?.read_regs()?;
+
             if let Some(bp) = self
                 .breakpoints
                 .borrow_mut()
-                .get_mut(&(self.read_regs()?.rip as usize - 1))
+                .get_mut(&(regs.ip() as usize - 1))
             {
                 // Register which breakpoint was  hit
                 self.hit_breakpoint.borrow_mut().replace(bp.clone());
@@ -141,7 +167,7 @@ impl LinuxTarget {
         let bp = { self.hit_breakpoint.borrow_mut().take() };
         // if we have hit a breakpoint previously
         if let Some(mut bp) = bp {
-            let rip = self.read_regs()?.rip as usize;
+            let rip = self.main_thread()?.read_regs()?.ip() as usize;
             // if we are not a the right address, we simply set the breakpoint again, and
             // carry on
             if (rip == bp.addr) && bp.is_enabled() {
@@ -202,16 +228,12 @@ impl LinuxTarget {
     }
 
     /// Reads the register values from the main thread of a debuggee process.
-    pub fn read_regs(&self) -> CrabResult<libc::user_regs_struct> {
-        nix::sys::ptrace::getregs(self.pid()).map_err(|err| err.into())
-    }
-
-    /// Writes the register values for the main thread of a debuggee process.
-    pub fn write_regs(&self, regs: libc::user_regs_struct) -> CrabResult<()> {
-        nix::sys::ptrace::setregs(self.pid(), regs).map_err(|err| err.into())
+    pub fn read_regs(&self) -> CrabResult<Box<dyn Registers>> {
+        Ok(Box::new(self.main_thread()?.read_regs()?))
     }
 
     /// Let the debuggee process execute the specified syscall.
+    #[cfg(target_arch = "x86_64")]
     pub fn syscall(
         &self,
         num: libc::c_ulonglong,
@@ -222,39 +244,45 @@ impl LinuxTarget {
         arg5: libc::c_ulonglong,
         arg6: libc::c_ulonglong,
     ) -> CrabResult<libc::c_ulonglong> {
+        use gimli::X86_64;
+
         // Write arguments
-        let orig_regs = self.read_regs()?;
+        let orig_regs = self.main_thread()?.read_regs()?;
+
         let mut new_regs = orig_regs.clone();
-        new_regs.rax = num;
-        new_regs.rdi = arg1;
-        new_regs.rsi = arg2;
-        new_regs.rdx = arg3;
-        new_regs.r10 = arg4;
-        new_regs.r8 = arg5;
-        new_regs.r9 = arg6;
-        self.write_regs(new_regs)?;
+
+        // unwraps are safe because we limit this impl to x86_64
+        new_regs.set_reg_for_dwarf(X86_64::RAX, num).unwrap();
+        new_regs.set_reg_for_dwarf(X86_64::RDI, arg1).unwrap();
+        new_regs.set_reg_for_dwarf(X86_64::RSI, arg2).unwrap();
+        new_regs.set_reg_for_dwarf(X86_64::RDX, arg3).unwrap();
+        new_regs.set_reg_for_dwarf(X86_64::R10, arg4).unwrap();
+        new_regs.set_reg_for_dwarf(X86_64::R8, arg5).unwrap();
+        new_regs.set_reg_for_dwarf(X86_64::R9, arg6).unwrap();
+        self.main_thread()?.write_regs(new_regs)?;
 
         // Write syscall instruction
         // FIXME search for an existing syscall instruction once instead
-        let old_inst = nix::sys::ptrace::read(self.pid(), new_regs.rip as *mut _)?;
+        let old_inst = nix::sys::ptrace::read(self.pid(), new_regs.ip() as *mut _)?;
         nix::sys::ptrace::write(
             self.pid(),
-            new_regs.rip as *mut _,
+            new_regs.ip() as *mut _,
             0x050f/*x86_64 syscall*/ as *mut _,
         )?;
 
         // Perform syscall
-        ptrace::step(self.pid(), None)?;
-        waitpid(self.pid(), None)?;
+        nix::sys::ptrace::step(self.pid(), None)?;
+        nix::sys::wait::waitpid(self.pid(), None)?;
 
         // Read return value
-        let res = self.read_regs()?.rax;
+        let regs = self.read_regs()?;
+        let res = regs.reg_for_dwarf(X86_64::RAX);
 
         // Restore old code and registers
-        nix::sys::ptrace::write(self.pid(), new_regs.rip as *mut _, old_inst as *mut _)?;
-        self.write_regs(orig_regs)?;
+        nix::sys::ptrace::write(self.pid(), new_regs.ip() as *mut _, old_inst as *mut _)?;
+        self.main_thread()?.write_regs(orig_regs)?;
 
-        Ok(res)
+        Ok(res.unwrap())
     }
 
     /// Let the debuggee process map memory.
@@ -305,12 +333,20 @@ impl LinuxTarget {
         Ok(())
     }
 
+    /// Returns the main process thread.
+    pub fn main_thread(&self) -> CrabResult<BoxedLinuxThread> {
+        match Process::new(self.pid.as_raw())?.task_main_thread() {
+            Ok(task) => Ok(Box::new(LinuxThread::new(task))),
+            Err(e) => Err(From::from(e)),
+        }
+    }
+
     /// Returns the current snapshot view of this debuggee process threads.
-    pub fn threads(&self) -> CrabResult<Vec<Box<dyn Thread<ThreadId = i32>>>> {
+    pub fn threads(&self) -> CrabResult<Vec<BoxedLinuxThread>> {
         let tasks: Vec<_> = Process::new(self.pid.as_raw())?
             .tasks()?
             .flatten()
-            .map(|task| Box::new(LinuxThread::new(task)) as Box<dyn Thread<ThreadId = i32>>)
+            .map(|task| Box::new(LinuxThread::new(task)) as _)
             .collect();
 
         Ok(tasks)
@@ -491,9 +527,9 @@ impl LinuxTarget {
         bp.unset()?;
 
         // rollback the P.C
-        let mut regs = self.read_regs()?;
-        regs.rip -= 1;
-        self.write_regs(regs)?;
+        let mut regs = self.main_thread()?.read_regs()?;
+        regs.set_ip(regs.ip() - 1);
+        self.main_thread()?.write_regs(regs)?;
 
         Ok(())
     }

@@ -27,7 +27,7 @@ fn source() -> CrabResult<()> {
 
     // First breakpoint
     target.unpause()?;
-    let ip = target.read_regs()?.rip;
+    let ip = target.read_regs()?.ip();
     println!("{:08x}", ip);
     assert_eq!(
         debuginfo.get_address_symbol_name(ip as usize).as_deref(),
