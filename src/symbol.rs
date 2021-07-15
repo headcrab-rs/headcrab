@@ -104,11 +104,9 @@ impl<'a> ParsedDwarf<'a> {
                 None => Ok(gimli::EndianReader::new(RcCow::Borrowed(&[][..]), endian)),
             }
         };
-        // we don't support supplementary object files for now
-        let sup_loader = |_| Ok(gimli::EndianReader::new(RcCow::Borrowed(&[][..]), endian));
 
         // Create `EndianSlice`s for all of the sections.
-        let dwarf = gimli::Dwarf::load(loader, sup_loader)?;
+        let dwarf = gimli::Dwarf::load(loader)?;
 
         let addr2line = addr2line::Context::from_dwarf(dwarf)?;
         let dwarf = addr2line.dwarf();
