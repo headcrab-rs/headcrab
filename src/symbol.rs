@@ -69,13 +69,7 @@ pub type Reader<'a> = gimli::EndianReader<gimli::RunTimeEndian, RcCow<'a, [u8]>>
 pub struct ParsedDwarf<'a> {
     object: object::File<'a>,
     addr2line: addr2line::Context<Reader<'a>>,
-    vars: BTreeMap<
-        String,
-        (
-            gimli::CompilationUnitHeader<Reader<'a>>,
-            gimli::Expression<Reader<'a>>,
-        ),
-    >,
+    vars: BTreeMap<String, (gimli::UnitHeader<Reader<'a>>, gimli::Expression<Reader<'a>>)>,
     symbols: Vec<Symbol<'a>>,
     symbol_names: HashMap<String, usize>,
 }
