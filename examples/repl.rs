@@ -398,9 +398,21 @@ mod example {
         if let Some(addr) = parse_address(location).or(parse_symbol(&location, context)) {
             Ok(vec![addr])
         } else {
-            Err(format!(
+            if let Some(source_location) = parse_source_location(location) {
+                Ok(context
+                    .debuginfo
+                    .as_ref()
+                    .unwrap() // this unwrap cannot fail due to the call to load_debuginfo_if_necessary
+                    .find_location_addr(&source_location)
+                    .unwrap() // todo: this unwrap could fail if the debugee contain invalid debug info.
+                    .into_iter()
+                    .map(|(_, addr)| addr as usize)
+                    .collect())
+            } else {
+                Err(format!(
                     "Breakpoints must be set on a symbol or at a given address. For example `b main` or `b 0x0000555555559394` or even `b 93824992252820`"
                 ))?
+            }
         }
     }
 
@@ -425,6 +437,27 @@ mod example {
 
     fn parse_symbol(location: &str, context: &mut Context) -> Option<usize> {
         context.debuginfo().get_symbol_address(&location)
+    }
+
+    fn parse_source_location(location: &str) -> Option<addr2line::Location> {
+        use addr2line::Location;
+
+        let mut iter = location.split(":");
+        let file = iter.next();
+        let line = iter
+            .next()
+            .map_or(None, parse_address)
+            .map_or(None, |num| NonZeroU32::new(num as u32));
+        let column = iter
+            .next()
+            .map_or(None, parse_address)
+            .map_or(None, |num| NonZeroU32::new(num as u32));
+
+        if let (Some(file), Some(line)) = (file, line) {
+            Some(Location { file, line, column })
+        } else {
+            None
+        }
     }
 
     fn show_backtrace(context: &mut Context, bt_type: &BacktraceType) -> CrabResult<()> {
