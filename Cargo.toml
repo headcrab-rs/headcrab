@@ -16,7 +16,7 @@ lazy_static = "1.4.0"
 object = "0.20"
 gimli = "0.25.0"
 capstone = "0.7.0"
-addr2line = "0.16.0"
+addr2line = {git="https://github.com/FlyingCanoe/addr2line.git"}
 syntect = {version = "4.4.0", optional = true}
 
 # Dependencies specific to macOS & Linux

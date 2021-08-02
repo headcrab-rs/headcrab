@@ -10,6 +10,7 @@ fn main() {
 
 #[cfg(target_os = "linux")]
 mod example {
+    use std::num::NonZeroU32;
     use std::{borrow::Cow, process::Command};
     use std::{os::unix::ffi::OsStrExt, path::PathBuf};
 
@@ -437,13 +438,7 @@ mod example {
                         let location = frame
                             .location
                             .as_ref()
-                            .map(|loc| {
-                                format!(
-                                    "{}:{}",
-                                    loc.file.unwrap_or("<unknown file>"),
-                                    loc.line.unwrap_or(0),
-                                )
-                            })
+                            .map(|loc| format!("{}:{}", loc.file, loc.line))
                             .unwrap_or_default();
 
                         if first_frame {
@@ -493,13 +488,7 @@ mod example {
                     let location = frame
                         .location
                         .as_ref()
-                        .map(|loc| {
-                            format!(
-                                "{}:{}",
-                                loc.file.unwrap_or("<unknown file>"),
-                                loc.line.unwrap_or(0),
-                            )
-                        })
+                        .map(|loc| format!("{}:{}", loc.file, loc.line))
                         .unwrap_or_default();
 
                     if first_frame {
@@ -637,9 +626,9 @@ mod example {
                         .as_ref()
                         .map(|loc| {
                             (
-                                loc.file.unwrap_or("<unknown file>"),
-                                loc.line.unwrap_or(0),
-                                loc.column.unwrap_or(0),
+                                loc.file,
+                                loc.line.get(),
+                                loc.column.map(NonZeroU32::get).unwrap_or(0),
                             )
                         })
                         .unwrap_or_default();
