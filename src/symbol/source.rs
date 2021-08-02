@@ -2,6 +2,7 @@ use capstone::Capstone;
 
 use std::fs::File;
 use std::io::{prelude::*, BufReader};
+use std::num::NonZeroU32;
 
 use crate::CrabResult;
 
@@ -62,12 +63,9 @@ impl super::Dwarf {
                 .find_location(addr as u64)?
                 .ok_or_else(|| "source location not found".to_string())?;
             Ok((
-                location
-                    .file
-                    .ok_or_else(|| "Unknown file".to_string())?
-                    .to_string(),
-                location.line.unwrap_or(0) as u64,
-                location.column.unwrap_or(0) as u64,
+                location.file.to_string(),
+                location.line.get() as u64,
+                location.column.map(NonZeroU32::get).unwrap_or(0) as u64,
             ))
         })
     }
