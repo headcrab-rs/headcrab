@@ -307,19 +307,16 @@ impl LinuxTarget {
     }
 
     /// unmap the memory.
-    pub unsafe fn munmap(
-        &self,
-        addr: *mut libc::c_void,
-        length: libc::size_t,
-    ) -> CrabResult<()> {
-        if libc::munmap(
-            addr,
-            length,
-        ) == -1 {
-             Err("mmunmap failed")
-        } else {
-             Ok(())
-        }
+    pub fn munmap(&self, addr: *mut libc::c_void, length: libc::size_t) -> CrabResult<libc::c_ulonglong> {
+        self.syscall(
+            libc::SYS_munmap as _,
+            addr as _,
+            length as _,
+            0,
+            0,
+            0,
+            0,
+        )
     }
 
     pub fn memory_maps(&self) -> CrabResult<Vec<super::MemoryMap>> {
