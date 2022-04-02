@@ -314,6 +314,7 @@ impl LinuxTarget {
     ) -> CrabResult<libc::c_ulonglong> {
         self.syscall(libc::SYS_munmap as _, addr as _, length as _, 0, 0, 0, 0)
     }
+
     pub fn memory_maps(&self) -> CrabResult<Vec<super::MemoryMap>> {
         Ok(procfs::process::Process::new(self.pid.as_raw())?
             .maps()?
