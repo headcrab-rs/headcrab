@@ -1,6 +1,6 @@
 //! Headcrab, a modern Rust debugging library.
 
-pub type CrabResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync + Sync>>;
+pub type CrabResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 /// Functions to work with target processes: reading & writing memory, process control functions, etc.
 pub mod target;
