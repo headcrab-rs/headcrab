@@ -20,10 +20,11 @@ fn syscall() -> CrabResult<()> {
         std::fs::read_to_string(format!("/proc/{}/maps", target.pid()))?
     );
 
+    let len = 1 << 20;
     let addr = target
         .mmap(
             0 as *mut _,
-            1 << 20,
+            len,
             libc::PROT_READ | libc::PROT_WRITE,
             libc::MAP_ANONYMOUS | libc::MAP_PRIVATE,
             0,
