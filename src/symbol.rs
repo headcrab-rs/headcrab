@@ -14,6 +14,7 @@ use std::{
     borrow::Cow,
     collections::{BTreeMap, HashMap},
     fs::File,
+    num::NonZeroU32,
     path::Path,
 };
 pub use sym::Symbol;
@@ -69,13 +70,7 @@ pub type Reader<'a> = gimli::EndianReader<gimli::RunTimeEndian, RcCow<'a, [u8]>>
 pub struct ParsedDwarf<'a> {
     object: object::File<'a>,
     addr2line: addr2line::Context<Reader<'a>>,
-    vars: BTreeMap<
-        String,
-        (
-            gimli::CompilationUnitHeader<Reader<'a>>,
-            gimli::Expression<Reader<'a>>,
-        ),
-    >,
+    vars: BTreeMap<String, (gimli::UnitHeader<Reader<'a>>, gimli::Expression<Reader<'a>>)>,
     symbols: Vec<Symbol<'a>>,
     symbol_names: HashMap<String, usize>,
 }
@@ -110,11 +105,9 @@ impl<'a> ParsedDwarf<'a> {
                 None => Ok(gimli::EndianReader::new(RcCow::Borrowed(&[][..]), endian)),
             }
         };
-        // we don't support supplementary object files for now
-        let sup_loader = |_| Ok(gimli::EndianReader::new(RcCow::Borrowed(&[][..]), endian));
 
         // Create `EndianSlice`s for all of the sections.
-        let dwarf = gimli::Dwarf::load(loader, sup_loader)?;
+        let dwarf = gimli::Dwarf::load(loader)?;
 
         let addr2line = addr2line::Context::from_dwarf(dwarf)?;
         let dwarf = addr2line.dwarf();
@@ -235,6 +228,17 @@ impl<'a> ParsedDwarf<'a> {
             iter: self.addr2line.find_frames(addr as u64)?,
         })
     }
+
+    /// Find an address for each substatement in the `Location`.
+    /// This function returns a hashmap where a key is a column number of each statement
+    /// and a value is an address of an instruction from that statement.
+    /// If the `Location` specifies a column number, the hashmap will only contain one value.
+    pub fn find_location_addr(
+        &'a self,
+        location: &addr2line::Location,
+    ) -> CrabResult<HashMap<Option<NonZeroU32>, u64>> {
+        Ok(self.addr2line.find_addresses(location)?)
+    }
 }
 
 mod inner {
@@ -329,5 +333,16 @@ impl Dwarf {
         f: F,
     ) -> CrabResult<T> {
         self.rent(|parsed| f(addr, parsed.get_addr_frames(addr)?))
+    }
+
+    /// Find an address for each substatement in the `Location`.
+    /// This function returns a hashmap where a key is a column number of each statement
+    /// and a value is an address of an instruction from that statement.
+    /// If the `Location` specifies a column number, the hashmap will only contain one value.
+    pub fn find_location_addr(
+        &self,
+        location: &addr2line::Location,
+    ) -> CrabResult<HashMap<Option<NonZeroU32>, u64>> {
+        self.rent(|parsed| parsed.find_location_addr(location))
     }
 }

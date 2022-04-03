@@ -10,6 +10,7 @@ fn main() {
 
 #[cfg(target_os = "linux")]
 mod example {
+    use std::num::NonZeroU32;
     use std::{borrow::Cow, process::Command};
     use std::{os::unix::ffi::OsStrExt, path::PathBuf};
 
@@ -337,7 +338,11 @@ mod example {
                 context.remote = None;
             }
             ReplCommand::Kill(()) => println!("{:?}", context.remote()?.kill()?),
-            ReplCommand::Breakpoint(location) => set_breakpoint(context, &location)?,
+            ReplCommand::Breakpoint(location) => {
+                for addr in parse_breakpoint(context, &location)? {
+                    set_breakpoint(context, addr)?
+                }
+            }
             ReplCommand::Stepi(()) => {
                 println!("{:?}", context.remote()?.step()?);
                 return print_source_for_top_of_stack_symbol(context, 3);
@@ -388,34 +393,71 @@ mod example {
         Ok(())
     }
 
-    fn set_breakpoint(context: &mut Context, location: &str) -> CrabResult<()> {
+    fn parse_breakpoint(context: &mut Context, location: &str) -> CrabResult<Vec<usize>> {
         context.load_debuginfo_if_necessary()?;
-
-        if let Ok(addr) = {
-            usize::from_str_radix(&location, 10)
-                .map(|addr| addr as usize)
-                .map_err(|e| Box::new(e))
-                .or_else(|_e| {
-                    if location.starts_with("0x") {
-                        let raw_num = location.trim_start_matches("0x");
-                        usize::from_str_radix(raw_num, 16)
-                            .map(|addr| addr as usize)
-                            .map_err(|_e| Box::new(format!("Invalid address format.")))
-                    } else {
-                        context
-                            .debuginfo()
-                            .get_symbol_address(&location)
-                            .ok_or(Box::new(format!("No such symbol {}", location)))
-                    }
-                })
-        } {
-            context.mut_remote()?.set_breakpoint(addr)?;
+        if let Some(addr) = parse_address(location).or(parse_symbol(&location, context)) {
+            Ok(vec![addr])
         } else {
-            Err(format!(
-                "Breakpoints must be set on a symbol or at a given address. For example `b main` or `b 0x0000555555559394` or even `b 93824992252820`"
-            ))?
+            if let Some(source_location) = parse_source_location(location) {
+                Ok(context
+                    .debuginfo
+                    .as_ref()
+                    .unwrap() // this unwrap cannot fail due to the call to load_debuginfo_if_necessary
+                    .find_location_addr(&source_location)
+                    .unwrap() // todo: this unwrap could fail if the debugee contain invalid debug info.
+                    .into_iter()
+                    .map(|(_, addr)| addr as usize)
+                    .collect())
+            } else {
+                Err(format!(
+                    "Breakpoints must be set on a symbol or at a given address. For example `b main` or `b 0x0000555555559394` or even `b 93824992252820`"
+                ))?
+            }
         }
+    }
+
+    fn set_breakpoint(context: &mut Context, addr: usize) -> CrabResult<()> {
+        context.mut_remote()?.set_breakpoint(addr)?;
         Ok(())
+    }
+
+    fn parse_address(location: &str) -> Option<usize> {
+        if let Ok(addr) = usize::from_str_radix(&location, 10) {
+            return Some(addr);
+        } else {
+            if location.starts_with("0x") {
+                let raw_num = location.trim_start_matches("0x");
+                if let Ok(addr) = usize::from_str_radix(raw_num, 16) {
+                    return Some(addr);
+                }
+            }
+        }
+        None
+    }
+
+    fn parse_symbol(location: &str, context: &mut Context) -> Option<usize> {
+        context.debuginfo().get_symbol_address(&location)
+    }
+
+    fn parse_source_location(location: &str) -> Option<addr2line::Location> {
+        use addr2line::Location;
+
+        let mut iter = location.split(":");
+        let file = iter.next();
+        let line = iter
+            .next()
+            .map_or(None, parse_address)
+            .map_or(None, |num| NonZeroU32::new(num as u32));
+        let column = iter
+            .next()
+            .map_or(None, parse_address)
+            .map_or(None, |num| NonZeroU32::new(num as u32));
+
+        if let (Some(file), Some(line)) = (file, line) {
+            Some(Location { file, line, column })
+        } else {
+            None
+        }
     }
 
     fn show_backtrace(context: &mut Context, bt_type: &BacktraceType) -> CrabResult<()> {
@@ -437,13 +479,7 @@ mod example {
                         let location = frame
                             .location
                             .as_ref()
-                            .map(|loc| {
-                                format!(
-                                    "{}:{}",
-                                    loc.file.unwrap_or("<unknown file>"),
-                                    loc.line.unwrap_or(0),
-                                )
-                            })
+                            .map(|loc| format!("{}:{}", loc.file, loc.line))
                             .unwrap_or_default();
 
                         if first_frame {
@@ -493,13 +529,7 @@ mod example {
                     let location = frame
                         .location
                         .as_ref()
-                        .map(|loc| {
-                            format!(
-                                "{}:{}",
-                                loc.file.unwrap_or("<unknown file>"),
-                                loc.line.unwrap_or(0),
-                            )
-                        })
+                        .map(|loc| format!("{}:{}", loc.file, loc.line))
                         .unwrap_or_default();
 
                     if first_frame {
@@ -637,9 +667,9 @@ mod example {
                         .as_ref()
                         .map(|loc| {
                             (
-                                loc.file.unwrap_or("<unknown file>"),
-                                loc.line.unwrap_or(0),
-                                loc.column.unwrap_or(0),
+                                loc.file,
+                                loc.line.get(),
+                                loc.column.map(NonZeroU32::get).unwrap_or(0),
                             )
                         })
                         .unwrap_or_default();
