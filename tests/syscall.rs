@@ -38,7 +38,7 @@ fn syscall() -> CrabResult<()> {
             // Found mapped addr
             test_utils::continue_to_end(&target);
 
-            // unmap the previously mapped memory 
+            // unmap the previously mapped memory
             // and check that it is no longer in the mapped memory list.
             target.munmap(addr as *mut _, len);
             assert!(!target.memory_maps().contains(&addr));
