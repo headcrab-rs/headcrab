@@ -31,7 +31,7 @@ fn syscall() -> CrabResult<()> {
         )
         .unwrap();
 
-    assert!(target.memory_maps()?.contains(&addr));
+    assert!(target.memory_maps()?.iter().any(|map| map.address.0 == addr));
 
     for line in std::fs::read_to_string(format!("/proc/{}/maps", target.pid()))?.lines() {
         if line.starts_with(&format!("{:08x}-", addr)) {
