@@ -101,10 +101,10 @@ impl<'a> Frame<'a> {
                 return Ok(SearchAction::SkipChildren); // Already visited by addr2line frame iter
             }
 
-            if entry.tag() == gimli::DW_TAG_lexical_block {
-                if !super::dwarf_utils::in_range(dwarf, &unit, Some(&entry), addr)? {
-                    return Ok(SearchAction::SkipChildren);
-                }
+            if entry.tag() == gimli::DW_TAG_lexical_block
+                && !super::dwarf_utils::in_range(dwarf, unit, Some(&entry), addr)?
+            {
+                return Ok(SearchAction::SkipChildren);
             }
 
             if entry.tag() == gimli::DW_TAG_variable {

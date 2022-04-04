@@ -84,8 +84,8 @@ impl MemoryOp {
 /// let maps: Vec<MemoryMap> = vec![];
 /// let protected_maps = maps.into_iter().filter(|map| !map.is_writable);
 /// ```
-pub(crate) fn split_protected<'a>(
-    protected_maps: &'a [MemoryMap],
+pub(crate) fn split_protected(
+    protected_maps: &[MemoryMap],
     operations: impl Iterator<Item = MemoryOp>,
 ) -> (Vec<MemoryOp>, Vec<MemoryOp>) {
     let (protected, permissioned): (_, Vec<_>) = operations.partition(|op| {

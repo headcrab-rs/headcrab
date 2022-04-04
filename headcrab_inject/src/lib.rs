@@ -60,7 +60,7 @@ pub fn inject_clif_code(
 
         match directive {
             "declare" => {
-                let (id, content) = content.split_at(content.find(" ").unwrap_or(content.len()));
+                let (id, content) = content.split_at(content.find(' ').unwrap_or(content.len()));
                 let content = content.trim_start();
                 match parse_func_or_data(id) {
                     FuncOrDataId::Func(func_id) => {
@@ -72,7 +72,7 @@ pub fn inject_clif_code(
                 }
             }
             "define" => {
-                let (id, content) = content.split_at(content.find(" ").unwrap_or(content.len()));
+                let (id, content) = content.split_at(content.find(' ').unwrap_or(content.len()));
                 let content = content.trim_start();
                 match parse_func_or_data(id) {
                     FuncOrDataId::Data(data_id) => {
