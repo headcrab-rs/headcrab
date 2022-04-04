@@ -31,8 +31,10 @@ fn syscall() -> CrabResult<()> {
             0,
         )
         .unwrap();
-
-    assert!(target.memory_maps()?.iter().any(|map| map.address.0 == addr));
+    assert!(target
+        .memory_maps()?
+        .iter()
+        .any(|map| map.address.0 == addr));
 
     for line in std::fs::read_to_string(format!("/proc/{}/maps", target.pid()))?.lines() {
         if line.starts_with(&format!("{:08x}-", addr)) {
@@ -42,7 +44,10 @@ fn syscall() -> CrabResult<()> {
             // unmap the previously mapped memory
             // and check that it is no longer in the mapped memory list.
             target.munmap(addr as *mut _, len)?;
-            assert!(target.memory_maps()?.iter().all(|map| map.address.0 != addr));
+            assert!(target
+                .memory_maps()?
+                .iter()
+                .all(|map| map.address.0 != addr));
 
             return Ok(());
         }
