@@ -43,7 +43,10 @@ fn syscall() -> CrabResult<()> {
 
             // unmap the previously mapped memory
             // and check that it is no longer in the mapped memory list.
+            dbg!("munmapping...");
             target.munmap(addr as *mut _, len)?;
+            dbg!("munmapped!");
+
             assert!(target
                 .memory_maps()?
                 .iter()
