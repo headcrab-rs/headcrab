@@ -34,7 +34,7 @@ impl DisassemblySource {
 
         let mut fmt = String::new();
 
-        for insn in self.0.disasm_all(&bytes, addr).unwrap().iter() {
+        for insn in self.0.disasm_all(bytes, addr).unwrap().iter() {
             if show_address {
                 write!(fmt, "0x{:016x}: ", insn.address()).unwrap();
             }

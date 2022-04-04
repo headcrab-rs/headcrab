@@ -80,10 +80,10 @@ macro_rules! dwarf_attr_exists_action_action {
 
 macro_rules! dwarf_attr_missing_action {
     (continue, $name:ident) => {
-        continue;
+        continue
     };
     (error, $name:ident) => {
-        return Err(concat!("missing ", stringify!($name), " attribute").into());
+        return Err(concat!("missing ", stringify!($name), " attribute").into())
     };
     (None, $name:ident) => {
         None

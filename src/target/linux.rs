@@ -21,6 +21,7 @@ use std::{
     fs::File,
     io::{BufRead, BufReader},
     process::Command,
+    ptr,
 };
 
 pub use hardware_breakpoint::{
@@ -77,7 +78,7 @@ where
 
     fn name(&self) -> CrabResult<Option<String>> {
         match self.task.stat() {
-            Ok(t_stat) => Ok(Some(t_stat.comm.clone())),
+            Ok(t_stat) => Ok(Some(t_stat.comm)),
             Err(ProcError::NotFound(_)) | Err(ProcError::Incomplete(_)) => {
                 // ok to skip. Thread is gone or it's page is not complete yet.
                 Ok(None)
@@ -219,12 +220,12 @@ impl LinuxTarget {
 
     /// Reads memory from a debuggee process.
     pub fn read(&self) -> ReadMemory {
-        ReadMemory::new(&self)
+        ReadMemory::new(self)
     }
 
     /// Writes memory to a debuggee process.
     pub fn write(&self) -> WriteMemory {
-        WriteMemory::new(&self)
+        WriteMemory::new(self)
     }
 
     /// Reads the register values from the main thread of a debuggee process.
@@ -233,6 +234,7 @@ impl LinuxTarget {
     }
 
     /// Let the debuggee process execute the specified syscall.
+    #[allow(clippy::too_many_arguments)]
     #[cfg(target_arch = "x86_64")]
     pub fn syscall(
         &self,
@@ -249,7 +251,7 @@ impl LinuxTarget {
         // Write arguments
         let orig_regs = self.main_thread()?.read_regs()?;
 
-        let mut new_regs = orig_regs.clone();
+        let mut new_regs = orig_regs;
 
         // unwraps are safe because we limit this impl to x86_64
         new_regs.set_reg_for_dwarf(X86_64::RAX, num).unwrap();
@@ -405,7 +407,7 @@ impl LinuxTarget {
                     ptrace::Request::PTRACE_POKEUSER,
                     self.pid,
                     (*DEBUG_REG_OFFSET + 6 * 8) as *mut libc::c_void,
-                    0 as *mut libc::c_void,
+                    ptr::null_mut(),
                 )?;
             }
 
@@ -430,10 +432,10 @@ impl LinuxTarget {
                 self.ptrace_peekuser((*DEBUG_REG_OFFSET + 6 * 8) as *mut libc::c_void)? as u64;
 
             let dr7_bit_mask: u64 = HardwareBreakpoint::bit_mask(index);
-            dr7 = dr7 & !dr7_bit_mask;
+            dr7 &= !dr7_bit_mask;
 
             let dr6_bit_mask: u64 = 1 << index;
-            dr6 = dr6 & !dr6_bit_mask as u64;
+            dr6 &= !dr6_bit_mask as u64;
 
             #[allow(deprecated)]
             unsafe {
@@ -462,12 +464,9 @@ impl LinuxTarget {
 
     pub fn clear_all_hardware_breakpoints(&mut self) -> CrabResult<()> {
         for index in 0..SUPPORTED_HARDWARE_BREAKPOINTS {
-            match self.hardware_breakpoints[index] {
-                Some(_) => {
-                    self.clear_hardware_breakpoint(index)?;
-                }
-                None => (),
-            };
+            if self.hardware_breakpoints[index].is_some() {
+                self.clear_hardware_breakpoint(index)?;
+            }
         }
         Ok(())
     }
@@ -511,7 +510,7 @@ impl LinuxTarget {
         let bp = Breakpoint::new(addr, self.pid())?;
         let existing_breakpoint = {
             let hdl = self.breakpoints.borrow();
-            hdl.get(&addr).map(|val| val.clone())
+            hdl.get(&addr).cloned()
         };
 
         let mut bp = match existing_breakpoint {
@@ -675,7 +674,7 @@ mod tests {
 
                     wait::waitpid(child, None).unwrap();
                 }
-                Err(x) => panic!(x),
+                Err(x) => panic!("{}", x),
             }
         }
     }
@@ -695,8 +694,8 @@ mod tests {
             let layout = Layout::from_size_align(*PAGE_SIZE * 3, *PAGE_SIZE).unwrap();
             let ptr = alloc_zeroed(layout);
 
-            let array_ptr = ptr.offset((*PAGE_SIZE - mem::size_of::<u32>()) as isize);
-            let second_page_ptr = ptr.offset(*PAGE_SIZE as _);
+            let array_ptr = ptr.add(*PAGE_SIZE - mem::size_of::<u32>());
+            let second_page_ptr = ptr.add(*PAGE_SIZE);
 
             match fork() {
                 Ok(ForkResult::Child) => {
@@ -733,7 +732,7 @@ mod tests {
 
                     wait::waitpid(child, None).unwrap();
                 }
-                Err(x) => panic!(x),
+                Err(x) => panic!("{}", x),
             }
         }
     }
@@ -763,7 +762,7 @@ mod tests {
         let threads: Vec<_> = threads
             .iter()
             .map(|t| {
-                let name = t.name().unwrap().unwrap_or_else(String::new);
+                let name = t.name().unwrap().unwrap_or_default();
                 let id = t.thread_id();
                 (name, id)
             })

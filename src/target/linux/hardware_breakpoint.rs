@@ -21,7 +21,7 @@ impl HardwareBreakpoint {
             HardwareBreakpointType::ReadWrite => 0b11,
             HardwareBreakpointType::Write => 0b01,
         };
-        type_bites << 16 + index * 4
+        type_bites << (16 + index * 4)
     }
 }
 

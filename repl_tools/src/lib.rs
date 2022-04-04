@@ -21,7 +21,7 @@ pub trait HighlightAndComplete: Sized {
     type Error: Error;
 
     fn from_str(line: &str) -> Result<Self, Self::Error>;
-    fn highlight<'l>(line: &'l str) -> Cow<'l, str>;
+    fn highlight(line: &str) -> Cow<str>;
     fn complete(
         line: &str,
         pos: usize,
@@ -110,7 +110,7 @@ impl HighlightAndComplete for () {
         }
     }
 
-    fn highlight<'l>(line: &'l str) -> Cow<'l, str> {
+    fn highlight(line: &str) -> Cow<str> {
         format!("\x1b[91m{}\x1b[0m", line).into()
     }
 
@@ -142,7 +142,7 @@ impl HighlightAndComplete for String {
         Ok(line.trim().to_owned())
     }
 
-    fn highlight<'l>(line: &'l str) -> Cow<'l, str> {
+    fn highlight(line: &str) -> Cow<str> {
         line.into()
     }
 
@@ -165,7 +165,7 @@ impl HighlightAndComplete for PathBuf {
         Ok(Path::new(line.trim()).to_owned())
     }
 
-    fn highlight<'l>(line: &'l str) -> Cow<'l, str> {
+    fn highlight(line: &str) -> Cow<str> {
         let path = std::path::Path::new(line.trim());
         if path.is_file() {
             // FIXME better colors

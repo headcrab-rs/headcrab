@@ -149,7 +149,7 @@ impl Iterator for WordSizedOps {
         };
 
         self.mem_op.local_ptr_len -= group_size;
-        self.mem_op.local_ptr = unsafe { self.mem_op.local_ptr.offset(group_size as isize) };
+        self.mem_op.local_ptr = unsafe { self.mem_op.local_ptr.add(group_size) };
         self.mem_op.remote_base += group_size;
 
         Some(output)
@@ -171,9 +171,7 @@ pub(crate) unsafe fn write_ptrace(
             let src_bytes: &[u8] =
                 slice::from_raw_parts(op.local_ptr as *const _, op.local_ptr_len);
 
-            for offset in 0..op.local_ptr_len {
-                word[offset] = src_bytes[offset];
-            }
+            word[..op.local_ptr_len].clone_from_slice(&src_bytes[..op.local_ptr_len]);
 
             ptrace::write(
                 pid,
@@ -311,7 +309,7 @@ mod tests {
                     status => panic!("Unexpected child status: {:?}", status),
                 }
             }
-            Err(x) => panic!(x),
+            Err(x) => panic!("{}", x),
         }
     }
 
@@ -331,10 +329,7 @@ mod tests {
             )
             .expect("Failed to mprotect");
 
-            (
-                ptr as *const usize,
-                ptr.offset(mem::size_of::<usize>() as _),
-            )
+            (ptr as *const usize, ptr.add(mem::size_of::<usize>()))
         };
 
         match fork() {
@@ -383,7 +378,7 @@ mod tests {
                     status => panic!("Unexpected child status: {:?}", status),
                 }
             },
-            Err(x) => panic!(x),
+            Err(x) => panic!("{}", x),
         };
     }
 
@@ -432,22 +427,20 @@ mod tests {
             local_ptr_len: mem::size_of_val(&val),
         };
 
-        unsafe {
-            assert_eq!(
-                &write_op.into_word_sized_ops().collect::<Vec<_>>()[..],
-                &[
-                    WriteOp {
-                        remote_base: 0x100,
-                        local_ptr: &val.v1 as *const _ as *mut c_void,
-                        local_ptr_len: mem::size_of::<u64>(),
-                    },
-                    WriteOp {
-                        remote_base: 0x100 + mem::size_of::<u64>(),
-                        local_ptr: &val.v2 as *const _ as *mut c_void,
-                        local_ptr_len: mem::size_of::<u16>(),
-                    }
-                ][..]
-            );
-        }
+        assert_eq!(
+            &write_op.into_word_sized_ops().collect::<Vec<_>>()[..],
+            &[
+                WriteOp {
+                    remote_base: 0x100,
+                    local_ptr: &val.v1 as *const _ as *mut c_void,
+                    local_ptr_len: mem::size_of::<u64>(),
+                },
+                WriteOp {
+                    remote_base: 0x100 + mem::size_of::<u64>(),
+                    local_ptr: &val.v2 as *const _ as *mut c_void,
+                    local_ptr_len: mem::size_of::<u16>(),
+                }
+            ][..]
+        );
     }
 }

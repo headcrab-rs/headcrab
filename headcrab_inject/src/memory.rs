@@ -1,6 +1,6 @@
 // Based on https://github.com/bytecodealliance/wasmtime/blob/48fab12142c971405ab1c56fdceadf78bc2bbff4/cranelift/simplejit/src/memory.rs
 
-use std::mem;
+use std::{mem, ptr};
 
 use headcrab::{target::LinuxTarget, CrabResult};
 
@@ -27,7 +27,7 @@ impl PtrLen {
         let page_size = *headcrab::target::PAGE_SIZE as u64;
         let alloc_size = round_up_to_page_size(size, page_size);
         let ptr = target.mmap(
-            0 as *mut _,
+            ptr::null_mut(),
             alloc_size as usize,
             prot,
             libc::MAP_ANONYMOUS | libc::MAP_PRIVATE,
