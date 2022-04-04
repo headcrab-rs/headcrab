@@ -19,6 +19,9 @@ jobs:
 
     steps:
     - uses: actions/checkout@v2
+    - name: Install Linux libraries
+      if: matrix.os == 'ubuntu-latest'
+      run: sudo apt-get install libxxf86vm-dev libxcb-shape0-dev libxcb-xfixes0-dev
     - name: Format
       run: cargo fmt --all -- --check
     - name: Clippy
