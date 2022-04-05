@@ -25,7 +25,7 @@ impl Breakpoint {
     pub(crate) fn new(addr: usize, pid: Pid) -> Result<Self, BreakpointError> {
         let mut shadow = 0_i64;
         unsafe {
-            ReadMemory::new(&LinuxTarget::new(pid))
+            ReadMemory::new(&LinuxTarget::from_debuggee_pid(pid))
                 .read(&mut shadow, addr)
                 .apply()
         }

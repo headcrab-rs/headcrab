@@ -227,7 +227,9 @@ mod tests {
     use nix::{
         sys::{
             mman::{mprotect, ProtFlags},
-            ptrace, wait,
+            ptrace,
+            signal::{self, Signal},
+            wait,
         },
         unistd::{fork, ForkResult},
     };
@@ -274,6 +276,14 @@ mod tests {
             Ok(ForkResult::Child) => {
                 ptrace::traceme().unwrap();
 
+                unsafe {
+                    assert_eq!(ptr::read_volatile(&write_var_op), 0);
+                    assert_eq!(ptr::read_volatile(&write_var2_op), 0);
+                }
+
+                // Wait for the parent process to signal to continue.
+                signal::raise(Signal::SIGSTOP).unwrap();
+
                 // Catch the panic so that we can report back to the original process.
                 let test_res = std::panic::catch_unwind(|| unsafe {
                     assert_eq!(ptr::read_volatile(&write_var_op), var);
@@ -285,9 +295,20 @@ mod tests {
                 std::process::exit(if test_res.is_ok() { 0 } else { 100 });
             }
             Ok(ForkResult::Parent { child, .. }) => {
-                let (target, _wait_stat) = LinuxTarget::attach(child, Default::default()).unwrap();
+                // Wait for child.
+                let wait_status = wait::waitpid(child, None).unwrap();
 
-                // Write memory to parent's process
+                match wait_status {
+                    wait::WaitStatus::Stopped(_pid, _sig) => {}
+                    status => {
+                        signal::kill(child, Signal::SIGKILL).unwrap();
+                        panic!("Unexpected child status: {:?}", status);
+                    }
+                }
+
+                let target = LinuxTarget::from_debuggee_pid(child);
+
+                // Write memory to the child's process
                 let write_mem = target
                     .write()
                     .write(&var, &write_var_op as *const _ as usize)
@@ -336,6 +357,14 @@ mod tests {
             Ok(ForkResult::Child) => {
                 ptrace::traceme().unwrap();
 
+                unsafe {
+                    assert_eq!(ptr::read_volatile(write_protected_ptr), 0);
+                    assert_eq!(ptr::read_volatile(write_protected_ptr), 0);
+                }
+
+                // Wait for the parent process to signal to continue.
+                signal::raise(Signal::SIGSTOP).unwrap();
+
                 // Catch the panic so that we can report back to the original process.
                 let test_res = std::panic::catch_unwind(|| unsafe {
                     assert_eq!(ptr::read_volatile(write_protected_ptr), var);
@@ -346,7 +375,18 @@ mod tests {
                 std::process::exit(if test_res.is_ok() { 0 } else { 100 });
             }
             Ok(ForkResult::Parent { child, .. }) => unsafe {
-                let (target, _wait_stat) = LinuxTarget::attach(child, Default::default()).unwrap();
+                // Wait for child.
+                let wait_status = wait::waitpid(child, None).unwrap();
+
+                match wait_status {
+                    wait::WaitStatus::Stopped(_pid, _sig) => {}
+                    status => {
+                        signal::kill(child, Signal::SIGKILL).unwrap();
+                        panic!("Unexpected child status: {:?}", status);
+                    }
+                }
+
+                let target = LinuxTarget::from_debuggee_pid(child);
 
                 // Write memory to the child's process.
                 target

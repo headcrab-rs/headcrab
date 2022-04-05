@@ -69,13 +69,7 @@ pub type Reader<'a> = gimli::EndianReader<gimli::RunTimeEndian, RcCow<'a, [u8]>>
 pub struct ParsedDwarf<'a> {
     object: object::File<'a>,
     addr2line: addr2line::Context<Reader<'a>>,
-    vars: BTreeMap<
-        String,
-        (
-            gimli::CompilationUnitHeader<Reader<'a>>,
-            gimli::Expression<Reader<'a>>,
-        ),
-    >,
+    vars: BTreeMap<String, (gimli::UnitHeader<Reader<'a>>, gimli::Expression<Reader<'a>>)>,
     symbols: Vec<Symbol<'a>>,
     symbol_names: HashMap<String, usize>,
 }
@@ -110,11 +104,9 @@ impl<'a> ParsedDwarf<'a> {
                 None => Ok(gimli::EndianReader::new(RcCow::Borrowed(&[][..]), endian)),
             }
         };
-        // we don't support supplementary object files for now
-        let sup_loader = |_| Ok(gimli::EndianReader::new(RcCow::Borrowed(&[][..]), endian));
 
         // Create `EndianSlice`s for all of the sections.
-        let dwarf = gimli::Dwarf::load(loader, sup_loader)?;
+        let dwarf = gimli::Dwarf::load(loader)?;
 
         let addr2line = addr2line::Context::from_dwarf(dwarf)?;
         let dwarf = addr2line.dwarf();

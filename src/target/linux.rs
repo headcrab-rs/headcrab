@@ -184,7 +184,11 @@ impl LinuxTarget {
         Ok(status)
     }
 
-    fn new(pid: Pid) -> Self {
+    /// Creates a new debug target.
+    /// This method should only be used if you know that `pid` is expecting to be traced
+    /// (e.g., when it called `PTRACE_TRACEME`). Otherwise, you should use `LinuxTarget::attach`
+    /// or `LinuxTarget::launch`.
+    pub fn from_debuggee_pid(pid: Pid) -> Self {
         Self {
             pid,
             hardware_breakpoints: Default::default(),
@@ -196,7 +200,7 @@ impl LinuxTarget {
     /// Launches a new debuggee process
     pub fn launch(cmd: Command) -> CrabResult<(LinuxTarget, nix::sys::wait::WaitStatus)> {
         let (pid, status) = unix::launch(cmd)?;
-        let target = LinuxTarget::new(pid);
+        let target = LinuxTarget::from_debuggee_pid(pid);
         target.kill_on_exit()?;
         Ok((target, status))
     }
@@ -204,7 +208,7 @@ impl LinuxTarget {
     /// Attaches process as a debuggee.
     pub fn attach(pid: Pid, options: AttachOptions) -> CrabResult<(LinuxTarget, WaitStatus)> {
         let status = unix::attach(pid)?;
-        let target = LinuxTarget::new(pid);
+        let target = LinuxTarget::from_debuggee_pid(pid);
 
         if options.kill_on_exit {
             target.kill_on_exit()?;
@@ -215,7 +219,7 @@ impl LinuxTarget {
 
     /// Uses this process as a debuggee.
     pub fn me() -> LinuxTarget {
-        LinuxTarget::new(getpid())
+        LinuxTarget::from_debuggee_pid(getpid())
     }
 
     /// Reads memory from a debuggee process.
@@ -610,7 +614,7 @@ mod tests {
         let mut read_var2_op: u8 = 0;
 
         unsafe {
-            let target = LinuxTarget::new(getpid());
+            let target = LinuxTarget::me();
             ReadMemory::new(&target)
                 .read(&mut read_var_op, &var as *const _ as usize)
                 .read(&mut read_var2_op, &var2 as *const _ as usize)
