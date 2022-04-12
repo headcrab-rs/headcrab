@@ -95,20 +95,12 @@ impl<'a> InjectionModule<'a> {
 
     pub fn compile_clif_code(&mut self, isa: &dyn TargetIsa, ctx: &mut Context) -> CrabResult<()> {
         let mut code_mem = Vec::new();
-        let mut relocs = VecRelocSink::default();
 
-        ctx.compile_and_emit(
-            isa,
-            &mut code_mem,
-            &mut relocs,
-            &mut binemit::NullTrapSink {},
-            &mut binemit::NullStackmapSink {},
-        )
-        .unwrap();
+        ctx.compile_and_emit(isa, &mut code_mem).unwrap();
 
         let code_region = self.inj_ctx.allocate_code(code_mem.len() as u64, None)?;
 
-        for reloc_entry in relocs.0.drain(..) {
+        for reloc_entry in ctx.mach_compile_result.as_ref().unwrap().buffer.relocs() {
             let sym = match reloc_entry.name {
                 ir::ExternalName::User {
                     namespace: 0,
@@ -120,7 +112,7 @@ impl<'a> InjectionModule<'a> {
                 } => self.lookup_data_object(DataId::from_u32(index)),
                 _ => todo!("{:?}", reloc_entry.name),
             };
-            match reloc_entry.reloc {
+            match reloc_entry.kind {
                 binemit::Reloc::Abs8 => {
                     code_mem[reloc_entry.offset as usize..reloc_entry.offset as usize + 8]
                         .copy_from_slice(&u64::to_ne_bytes(
@@ -152,43 +144,5 @@ impl<'a> InjectionModule<'a> {
         );
 
         Ok(())
-    }
-}
-
-#[derive(Debug)]
-struct RelocEntry {
-    offset: binemit::CodeOffset,
-    reloc: binemit::Reloc,
-    name: ir::ExternalName,
-    addend: binemit::Addend,
-}
-
-#[derive(Default)]
-struct VecRelocSink(Vec<RelocEntry>);
-
-impl binemit::RelocSink for VecRelocSink {
-    fn reloc_block(&mut self, _: binemit::CodeOffset, _: binemit::Reloc, _: binemit::CodeOffset) {
-        todo!()
-    }
-    fn reloc_external(
-        &mut self,
-        offset: binemit::CodeOffset,
-        _: ir::SourceLoc,
-        reloc: binemit::Reloc,
-        name: &ir::ExternalName,
-        addend: binemit::Addend,
-    ) {
-        self.0.push(RelocEntry {
-            offset,
-            reloc,
-            name: name.clone(),
-            addend,
-        });
-    }
-    fn reloc_constant(&mut self, _: binemit::CodeOffset, _: binemit::Reloc, _: ir::ConstantOffset) {
-        todo!()
-    }
-    fn reloc_jt(&mut self, _: binemit::CodeOffset, _: binemit::Reloc, _: ir::entities::JumpTable) {
-        todo!()
     }
 }
