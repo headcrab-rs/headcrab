@@ -26,9 +26,12 @@ pub fn target_isa() -> Box<dyn TargetIsa> {
     let mut flag_builder = settings::builder();
     flag_builder.set("use_colocated_libcalls", "false").unwrap();
     let flags = settings::Flags::new(flag_builder);
+
+    // TODO: better error handling
     isa::lookup("x86_64".parse().unwrap())
         .unwrap()
         .finish(flags)
+        .unwrap()
 }
 
 fn parse_func_or_data(s: &str) -> FuncOrDataId {
@@ -108,7 +111,8 @@ pub fn inject_clif_code(
     let flags = settings::Flags::new(flag_builder);
     let isa = isa::lookup("x86_64".parse().unwrap())
         .unwrap()
-        .finish(flags);
+        .finish(flags)
+        .unwrap();
 
     let functions = cranelift_reader::parse_functions(code).unwrap();
     let mut ctx = cranelift_codegen::Context::new();

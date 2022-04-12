@@ -5,7 +5,10 @@ mod test_utils;
 #[cfg(target_os = "linux")]
 use cranelift_module::FuncId;
 #[cfg(target_os = "linux")]
-use headcrab::{symbol::RelocatedDwarf, target::UnixTarget};
+use headcrab::{
+    symbol::RelocatedDwarf,
+    target::{Registers, UnixTarget},
+};
 #[cfg(target_os = "linux")]
 use headcrab_inject::InjectionModule;
 #[cfg(target_os = "linux")]
@@ -61,18 +64,19 @@ fn inject_abort() -> headcrab::CrabResult<()> {
         run_function, stack_region
     );
 
-    let orig_regs = inj_module.target().read_regs()?;
-    println!("orig rip: {:016x}", orig_regs.rip);
-    let regs = libc::user_regs_struct {
-        rip: run_function,
-        rsp: stack_region + 0x1000,
-        ..orig_regs
-    };
-    inj_module.target().write_regs(regs)?;
+    let orig_regs = inj_module.target().main_thread()?.read_regs()?;
+    println!("orig rip: {:016x}", orig_regs.ip());
+
+    let mut regs = orig_regs.clone();
+    regs.set_ip(run_function);
+    regs.set_sp(stack_region + 0x1000);
+
+    inj_module.target().main_thread()?.write_regs(regs)?;
+
     let res = inj_module.target().unpause()?;
     if let WaitStatus::Stopped(_, Signal::SIGABRT) = res {
     } else {
-        println!("rip: {:016x}", inj_module.target().read_regs()?.rip);
+        println!("rip: {:016x}", inj_module.target().read_regs()?.ip());
         panic!("{:?}", res);
     }
 
