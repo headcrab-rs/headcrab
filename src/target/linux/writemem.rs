@@ -272,7 +272,7 @@ mod tests {
         let write_var2_op: u8 = 0;
         let write_array = [0u8; 4];
 
-        match fork() {
+        match unsafe { fork() } {
             Ok(ForkResult::Child) => {
                 ptrace::traceme().unwrap();
 
@@ -353,7 +353,7 @@ mod tests {
             (ptr as *const usize, ptr.add(mem::size_of::<usize>()))
         };
 
-        match fork() {
+        match unsafe { fork() } {
             Ok(ForkResult::Child) => {
                 ptrace::traceme().unwrap();
 

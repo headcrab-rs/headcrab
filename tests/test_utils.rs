@@ -61,12 +61,14 @@ pub fn patch_breakpoint(target: &LinuxTarget, debuginfo: &RelocatedDwarf) {
     let mut breakpoint_inst = pause_inst.to_ne_bytes();
     // int3; nop; ...
     breakpoint_inst[0] = 0xcc;
-    nix::sys::ptrace::write(
-        target.pid(),
-        breakpoint_addr as *mut _,
-        libc::c_ulong::from_ne_bytes(breakpoint_inst) as *mut _,
-    )
-    .unwrap();
+    unsafe {
+        nix::sys::ptrace::write(
+            target.pid(),
+            breakpoint_addr as *mut _,
+            libc::c_ulong::from_ne_bytes(breakpoint_inst) as *mut _,
+        )
+        .unwrap();
+    }
 }
 
 #[cfg(target_os = "linux")]

@@ -9,6 +9,7 @@ static BIN_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/testees/hell
 fn read_regs() -> headcrab::CrabResult<()> {
     use gimli::X86_64;
     use headcrab::target::Registers;
+    use nix::libc::user_regs_struct;
 
     test_utils::ensure_testees();
 
@@ -34,7 +35,7 @@ fn read_regs() -> headcrab::CrabResult<()> {
     assert_eq!(regs.reg_for_dwarf(X86_64::RDI).unwrap(), 0);
 
     // https://github.com/torvalds/linux/blob/f359287765c04711ff54fbd11645271d8e5ff763/arch/x86/entry/syscalls/syscall_64.tbl#L70
-    let user_regs: libc::user_regs_struct = regs.into();
+    let user_regs: user_regs_struct = regs.into();
 
     const X86_64_SYSCALL_EXECVE: u64 = 59;
     assert_eq!(user_regs.orig_rax, X86_64_SYSCALL_EXECVE);

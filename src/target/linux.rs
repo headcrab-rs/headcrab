@@ -10,7 +10,9 @@ use crate::target::{
     unix::{self, UnixTarget},
 };
 use crate::CrabResult;
+use nix::libc::user_regs_struct;
 use nix::sys::ptrace;
+use nix::sys::signal;
 use nix::sys::wait::{waitpid, WaitStatus};
 use nix::unistd::{getpid, Pid};
 use procfs::process::{Process, Task};
@@ -61,18 +63,18 @@ impl LinuxThread {
 
 impl<Regs> Thread<Regs> for LinuxThread
 where
-    Regs: Registers + From<libc::user_regs_struct> + Into<libc::user_regs_struct>,
+    Regs: Registers + From<user_regs_struct> + Into<user_regs_struct>,
 {
     type ThreadId = i32;
 
     fn read_regs(&self) -> CrabResult<Regs> {
-        let regs = nix::sys::ptrace::getregs(Pid::from_raw(self.task.tid))?;
+        let regs = ptrace::getregs(Pid::from_raw(self.task.tid))?;
         Ok(Regs::from(regs))
     }
 
     fn write_regs(&self, regs: Regs) -> CrabResult<()> {
         let regs = regs.into();
-        nix::sys::ptrace::setregs(Pid::from_raw(self.task.tid), regs)?;
+        ptrace::setregs(Pid::from_raw(self.task.tid), regs)?;
         Ok(())
     }
 
@@ -126,7 +128,7 @@ impl UnixTarget for LinuxTarget {
         let status = waitpid(self.pid(), None)?;
 
         // We may have hit a user defined breakpoint
-        if let WaitStatus::Stopped(_, nix::sys::signal::Signal::SIGTRAP) = status {
+        if let WaitStatus::Stopped(_, signal::Signal::SIGTRAP) = status {
             let regs = self.main_thread()?.read_regs()?;
 
             if let Some(bp) = self
@@ -198,7 +200,7 @@ impl LinuxTarget {
     }
 
     /// Launches a new debuggee process
-    pub fn launch(cmd: Command) -> CrabResult<(LinuxTarget, nix::sys::wait::WaitStatus)> {
+    pub fn launch(cmd: Command) -> CrabResult<(LinuxTarget, WaitStatus)> {
         let (pid, status) = unix::launch(cmd)?;
         let target = LinuxTarget::from_debuggee_pid(pid);
         target.kill_on_exit()?;
@@ -269,23 +271,27 @@ impl LinuxTarget {
 
         // Write syscall instruction
         // FIXME search for an existing syscall instruction once instead
-        let old_inst = nix::sys::ptrace::read(self.pid(), new_regs.ip() as *mut _)?;
-        nix::sys::ptrace::write(
-            self.pid(),
-            new_regs.ip() as *mut _,
-            0x050f/*x86_64 syscall*/ as *mut _,
-        )?;
+        let old_inst = ptrace::read(self.pid(), new_regs.ip() as *mut _)?;
+        unsafe {
+            ptrace::write(
+                self.pid(),
+                new_regs.ip() as *mut _,
+                0x050f/*x86_64 syscall*/ as *mut _,
+            )?;
+        }
 
         // Perform syscall
-        nix::sys::ptrace::step(self.pid(), None)?;
-        nix::sys::wait::waitpid(self.pid(), None)?;
+        ptrace::step(self.pid(), None)?;
+        waitpid(self.pid(), None)?;
 
         // Read return value
         let regs = self.read_regs()?;
         let res = regs.reg_for_dwarf(X86_64::RAX);
 
         // Restore old code and registers
-        nix::sys::ptrace::write(self.pid(), new_regs.ip() as *mut _, old_inst as *mut _)?;
+        unsafe {
+            ptrace::write(self.pid(), new_regs.ip() as *mut _, old_inst as *mut _)?;
+        }
         self.main_thread()?.write_regs(orig_regs)?;
 
         Ok(res.unwrap())
@@ -344,7 +350,7 @@ impl LinuxTarget {
 
     /// Kill debuggee when debugger exits.
     fn kill_on_exit(&self) -> CrabResult<()> {
-        nix::sys::ptrace::setoptions(self.pid, nix::sys::ptrace::Options::PTRACE_O_EXITKILL)?;
+        ptrace::setoptions(self.pid, ptrace::Options::PTRACE_O_EXITKILL)?;
         Ok(())
     }
 
@@ -382,7 +388,8 @@ impl LinuxTarget {
             let bit_mask = HardwareBreakpoint::bit_mask(index);
 
             let mut dr7: u64 =
-                self.ptrace_peekuser((*DEBUG_REG_OFFSET + 7 * 8) as *mut libc::c_void)? as u64;
+                ptrace::read_user(self.pid, (*DEBUG_REG_OFFSET + 7 * 8) as *mut libc::c_void)?
+                    as u64;
 
             // Check if hardware watchpoint is already used
             if dr7 & (1 << (2 * index)) != 0 {
@@ -392,23 +399,18 @@ impl LinuxTarget {
 
             dr7 = (dr7 & !bit_mask) | (enable_bit | rw_bits | size_bits);
 
-            #[allow(deprecated)]
             unsafe {
-                // Have to use deprecated function because of no alternative for PTRACE_POKEUSER
-                ptrace::ptrace(
-                    ptrace::Request::PTRACE_POKEUSER,
+                ptrace::write_user(
                     self.pid,
                     (*DEBUG_REG_OFFSET + index * 8) as *mut libc::c_void,
                     breakpoint.addr as *mut libc::c_void,
                 )?;
-                ptrace::ptrace(
-                    ptrace::Request::PTRACE_POKEUSER,
+                ptrace::write_user(
                     self.pid,
                     (*DEBUG_REG_OFFSET + 7 * 8) as *mut libc::c_void,
                     dr7 as *mut libc::c_void,
                 )?;
-                ptrace::ptrace(
-                    ptrace::Request::PTRACE_POKEUSER,
+                ptrace::write_user(
                     self.pid,
                     (*DEBUG_REG_OFFSET + 6 * 8) as *mut libc::c_void,
                     ptr::null_mut(),
@@ -431,9 +433,11 @@ impl LinuxTarget {
             }
 
             let mut dr7 =
-                self.ptrace_peekuser((*DEBUG_REG_OFFSET + 7 * 8) as *mut libc::c_void)? as u64;
+                ptrace::read_user(self.pid, (*DEBUG_REG_OFFSET + 7 * 8) as *mut libc::c_void)?
+                    as u64;
             let mut dr6 =
-                self.ptrace_peekuser((*DEBUG_REG_OFFSET + 6 * 8) as *mut libc::c_void)? as u64;
+                ptrace::read_user(self.pid, (*DEBUG_REG_OFFSET + 6 * 8) as *mut libc::c_void)?
+                    as u64;
 
             let dr7_bit_mask: u64 = HardwareBreakpoint::bit_mask(index);
             dr7 &= !dr7_bit_mask;
@@ -441,17 +445,13 @@ impl LinuxTarget {
             let dr6_bit_mask: u64 = 1 << index;
             dr6 &= !dr6_bit_mask as u64;
 
-            #[allow(deprecated)]
             unsafe {
-                // Have to use deprecated function because of no alternative for PTRACE_POKEUSER
-                ptrace::ptrace(
-                    ptrace::Request::PTRACE_POKEUSER,
+                ptrace::write_user(
                     self.pid,
                     (*DEBUG_REG_OFFSET + 7 * 8) as *mut libc::c_void,
                     dr7 as *mut libc::c_void,
                 )?;
-                ptrace::ptrace(
-                    ptrace::Request::PTRACE_POKEUSER,
+                ptrace::write_user(
                     self.pid,
                     (*DEBUG_REG_OFFSET + 6 * 8) as *mut libc::c_void,
                     dr6 as *mut libc::c_void,
@@ -478,17 +478,15 @@ impl LinuxTarget {
     pub fn is_hardware_breakpoint_triggered(&self) -> CrabResult<Option<usize>> {
         #[cfg(target_arch = "x86_64")]
         {
-            let mut dr7 = self.ptrace_peekuser((*DEBUG_REG_OFFSET + 6 * 8) as *mut libc::c_void)?;
+            let mut dr7 =
+                ptrace::read_user(self.pid, (*DEBUG_REG_OFFSET + 6 * 8) as *mut libc::c_void)?;
 
             for i in 0..SUPPORTED_HARDWARE_BREAKPOINTS {
                 if dr7 & (1 << i) != 0 && self.hardware_breakpoints[i].is_some() {
                     // Clear bit for this breakpoint
                     dr7 &= !(1 << i);
-                    // Have to use deprecated function because of no alternative for PTRACE_POKEUSER
-                    #[allow(deprecated)]
                     unsafe {
-                        ptrace::ptrace(
-                            ptrace::Request::PTRACE_POKEUSER,
+                        ptrace::write_user(
                             self.pid,
                             (*DEBUG_REG_OFFSET + 6 * 8) as *mut libc::c_void,
                             dr7 as *mut libc::c_void,
@@ -549,24 +547,6 @@ impl LinuxTarget {
     /// Disable the breakpoint. Call `set()` on the Breakpoint to enable it again
     pub fn disable_breakpoint(&self, bp: &mut Breakpoint) -> CrabResult<()> {
         bp.disable().map_err(|e| e.into())
-    }
-
-    // Temporary function until ptrace_peekuser is fixed in nix crate
-    #[cfg(target_arch = "x86_64")]
-    fn ptrace_peekuser(&self, addr: *mut libc::c_void) -> CrabResult<libc::c_long> {
-        let ret = unsafe {
-            nix::errno::Errno::clear();
-            libc::ptrace(
-                ptrace::Request::PTRACE_PEEKUSER as libc::c_uint,
-                libc::pid_t::from(self.pid),
-                addr,
-                std::ptr::null_mut() as *mut libc::c_void,
-            )
-        };
-        match nix::errno::Errno::result(ret) {
-            Ok(..) | Err(nix::Error::Sys(nix::errno::Errno::UnknownErrno)) => Ok(ret),
-            Err(err) => Err(Box::new(err)),
-        }
     }
 
     fn find_empty_watchpoint(&self) -> Option<usize> {

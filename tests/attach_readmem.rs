@@ -25,7 +25,7 @@ fn attach_readmem() -> CrabResult<()> {
         .get_var_address("STATICVAR")?
         .expect("Expected static var has not been found in the target binary");
 
-    match fork()? {
+    match unsafe { fork()? } {
         ForkResult::Parent { child, .. } => {
             use std::{thread, time};
             thread::sleep(time::Duration::from_millis(50));
@@ -55,7 +55,7 @@ fn attach_readmem() -> CrabResult<()> {
         }
         ForkResult::Child => {
             let path = CString::new(BIN_PATH)?;
-            execv(&path, &[])?;
+            execv::<CString>(&path, &[])?;
 
             // execv replaces the process image, so this place in code will not be reached.
             unreachable!();

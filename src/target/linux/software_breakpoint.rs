@@ -47,7 +47,9 @@ impl Breakpoint {
             let instr = ptrace::read(self.pid, self.addr as *mut _)?;
             self.shadow = instr;
             let trap_instr = (instr & !0xff) | INT3;
-            ptrace::write(self.pid, self.addr as *mut _, trap_instr as *mut _)?;
+            unsafe {
+                ptrace::write(self.pid, self.addr as *mut _, trap_instr as *mut _)?;
+            }
         }
         self.user_enabled.set(true);
         Ok(())
@@ -55,7 +57,9 @@ impl Breakpoint {
 
     pub fn unset(&self) -> Result<(), BreakpointError> {
         if self.is_armed() {
-            ptrace::write(self.pid, self.addr as *mut _, self.shadow as *mut _)?;
+            unsafe {
+                ptrace::write(self.pid, self.addr as *mut _, self.shadow as *mut _)?;
+            }
         }
         Ok(())
     }
